@@ -1,10 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../Config/db");
-
+const bcrypt = require("bcryptjs");
 
 // ================= REGISTER =================
-router.post("/register", (req, res) => {
+router.post("/register", async (req, res) => {
   const {
     role,
     company_name,
@@ -16,6 +16,8 @@ router.post("/register", (req, res) => {
     password,
   } = req.body;
 
+  const hashedPassword = await bcrypt.hash(password, 10);
+
   const sql = `
     INSERT INTO users 
     (role, company_name, contact_person, email, mobile, country, city, password)
@@ -24,8 +26,17 @@ router.post("/register", (req, res) => {
 
   db.query(
     sql,
-    [role, company_name, contact_person, email, mobile, country, city, password],
-    (err, result) => {
+    [
+      role,
+      company_name,
+      contact_person,
+      email,
+      mobile,
+      country,
+      city,
+      hashedPassword,
+    ],
+    (err) => {
       if (err) {
         return res.status(400).json({ message: "User already exists or error occurred" });
       }
@@ -38,16 +49,29 @@ router.post("/register", (req, res) => {
 
 // ================= LOGIN =================
 router.post("/login", (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, role } = req.body;
 
-  const sql = "SELECT * FROM users WHERE email = ? AND password = ?";
+  const sql = "SELECT * FROM users WHERE email = ?";
 
-  db.query(sql, [email, password], (err, results) => {
+  db.query(sql, [email], async (err, results) => {
     if (err || results.length === 0) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
     const user = results[0];
+
+    // ✅ ROLE CHECK
+    if (user.role !== role) {
+      return res.status(403).json({
+        message: `This account is registered as ${user.role}. Please login as ${user.role}.`
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
     res.json({
       message: "Login successful",
@@ -60,5 +84,4 @@ router.post("/login", (req, res) => {
     });
   });
 });
-
 module.exports = router;
