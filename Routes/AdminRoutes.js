@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const db = require("../Config/db");
 const bcrypt = require("bcryptjs");
+const transporter = require("../utils/mailer");
 
 
 // ================= GET ALL USERS =================
@@ -28,10 +29,12 @@ router.get("/user/:id", (req, res) => {
 
 
 // ================= APPROVE + GENERATE ONCE =================
+
+
 router.post("/approve/:id", (req, res) => {
 
     db.query(
-        "SELECT admin_password, email, mobile FROM users WHERE id=?",
+        "SELECT admin_password, email, mobile, company_name FROM users WHERE id=?",
         [req.params.id],
         async (err, rows) => {
 
@@ -40,12 +43,14 @@ router.post("/approve/:id", (req, res) => {
 
             const user = rows[0];
 
-            // 🔒 Already exists → NEVER regenerate
+            // 🔒 If already generated → just resend email
             if (user.admin_password && user.admin_password.trim() !== "") {
+
+                await sendMail(user.email, user.admin_password, user.company_name);
                 return res.json({ password: user.admin_password });
             }
 
-            // ✅ Professional readable credential
+            // Generate Password
             const rawPassword =
                 user.email.split("@")[0].slice(0, 4).toUpperCase() +
                 user.mobile.slice(-4);
@@ -54,13 +59,17 @@ router.post("/approve/:id", (req, res) => {
 
             db.query(
                 `UPDATE users 
-         SET status='approved',
-             password=?,
-             admin_password=?
-         WHERE id=?`,
+                 SET status='approved',
+                     password=?,
+                     admin_password=?
+                 WHERE id=?`,
                 [hashed, rawPassword, req.params.id],
-                err => {
+                async (err) => {
+
                     if (err) return res.status(500).json(err);
+
+                    await sendMail(user.email, rawPassword, user.company_name);
+
                     res.json({ password: rawPassword });
                 }
             );
@@ -68,6 +77,40 @@ router.post("/approve/:id", (req, res) => {
     );
 });
 
+
+
+async function sendMail(toEmail, password, companyName) {
+
+    const mailOptions = {
+        from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+        to: toEmail,
+        subject: "Your Account Has Been Approved 🎉",
+        html: `
+            <div style="font-family: Arial; padding:20px;">
+                <h2>Hello ${companyName},</h2>
+                <p>Your account has been <b>approved</b> by admin.</p>
+                
+                <h3>Login Credentials:</h3>
+                <p><b>Email:</b> ${toEmail}</p>
+                <p><b>Password:</b> ${password}</p>
+
+                <p>Please login and change your password after first login.</p>
+
+                <br/>
+                <a href="http://localhost:5173/login"
+                   style="background:#16a34a;color:white;padding:10px 20px;
+                   text-decoration:none;border-radius:5px;">
+                   Login Now
+                </a>
+
+                <br/><br/>
+                <p>Regards,<br/>B2B Partners Team</p>
+            </div>
+        `
+    };
+
+    await transporter.sendMail(mailOptions);
+}
 
 // ================= UPDATE STATUS =================
 router.put("/update-status/:id", (req, res) => {
