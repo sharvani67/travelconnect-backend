@@ -99,4 +99,42 @@ router.post("/login", (req, res) => {
     }
   );
 });
+
+
+router.post("/admin-login", (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ message: "Email and password required" });
+  }
+
+  db.query(
+    "SELECT * FROM users WHERE email = ? AND role = 'admin' LIMIT 1",
+    [email],
+    (err, rows) => {
+      if (err) return res.status(500).json(err);
+
+      if (!rows.length) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      const admin = rows[0];
+
+      // ✅ Compare with admin_password (plain text)
+      if (password !== admin.admin_password) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      delete admin.password;
+      delete admin.admin_password;
+
+      res.json({
+        message: "Login successful",
+        admin,
+      });
+    }
+  );
+});
+
+
 module.exports = router;
