@@ -77,7 +77,62 @@ router.post("/approve/:id", (req, res) => {
     );
 });
 
+router.post("/create-user", async (req, res) => {
+  const {
+    role,
+    supplier_type,
+    company_name,
+    contact_person,
+    email,
+    mobile,
+    country,
+    city,
+    pincode,
+    gst_applicable,
+    gst_number,
+  } = req.body;
 
+  const rawPassword =
+    email.split("@")[0].slice(0, 4).toUpperCase() +
+    mobile.slice(-4);
+
+  const hashed = await bcrypt.hash(rawPassword, 10);
+
+  const sql = `
+    INSERT INTO users
+    (role, supplier_type, company_name, contact_person, email,
+     mobile, country, city, pincode,
+     gst_applicable, gst_number,
+     password, admin_password, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')
+  `;
+
+  db.query(
+    sql,
+    [
+      role,
+      supplier_type,
+      company_name,
+      contact_person,
+      email,
+      mobile,
+      country,
+      city,
+      pincode,
+      gst_applicable,
+      gst_number,
+      hashed,
+      rawPassword,
+    ],
+    async (err) => {
+      if (err) return res.status(400).json(err);
+
+      await sendMail(email, rawPassword, company_name);
+
+      res.json({ message: "User created and credentials sent" });
+    }
+  );
+});
 
 async function sendMail(toEmail, password, companyName) {
 
