@@ -190,15 +190,17 @@ router.get("/", (req, res) => {
       AND rr.rate_type = 'weekday'
       AND rr.plan = 'CP'
 
+    WHERE p.status = 'Approved'   -- ✅ IMPORTANT
+
     GROUP BY 
-      p.id, p.name, p.category, p.city, p.area, p.pincode, img.image_path
+      p.id, p.name, p.category, p.city, 
+      p.area, p.pincode, img.image_path
 
     ORDER BY p.id DESC
   `;
 
     db.query(sql, (err, results) => {
         if (err) {
-            console.error(err);
             return res.status(500).json({ message: err.message });
         }
 

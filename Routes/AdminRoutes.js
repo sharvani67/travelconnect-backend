@@ -77,62 +77,7 @@ router.post("/approve/:id", (req, res) => {
     );
 });
 
-router.post("/create-user", async (req, res) => {
-  const {
-    role,
-    supplier_type,
-    company_name,
-    contact_person,
-    email,
-    mobile,
-    country,
-    city,
-    pincode,
-    gst_applicable,
-    gst_number,
-  } = req.body;
 
-  const rawPassword =
-    email.split("@")[0].slice(0, 4).toUpperCase() +
-    mobile.slice(-4);
-
-  const hashed = await bcrypt.hash(rawPassword, 10);
-
-  const sql = `
-    INSERT INTO users
-    (role, supplier_type, company_name, contact_person, email,
-     mobile, country, city, pincode,
-     gst_applicable, gst_number,
-     password, admin_password, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')
-  `;
-
-  db.query(
-    sql,
-    [
-      role,
-      supplier_type,
-      company_name,
-      contact_person,
-      email,
-      mobile,
-      country,
-      city,
-      pincode,
-      gst_applicable,
-      gst_number,
-      hashed,
-      rawPassword,
-    ],
-    async (err) => {
-      if (err) return res.status(400).json(err);
-
-      await sendMail(email, rawPassword, company_name);
-
-      res.json({ message: "User created and credentials sent" });
-    }
-  );
-});
 
 async function sendMail(toEmail, password, companyName) {
 
@@ -278,28 +223,80 @@ router.get("/bookings", async (req, res) => {
 
 // ================== ADMIN: GET ALL PROPERTIES ==================
 router.get("/properties", async (req, res) => {
-
     try {
+        const { page = 1, limit = 10, search = "" } = req.query;
 
-        const [rows] = await db.promise().query(`
+        const offset = (page - 1) * limit;
+
+        let where = "WHERE 1=1";
+        let params = [];
+
+        if (search) {
+            where += `
+        AND (
+          p.name LIKE ?
+          OR p.city LIKE ?
+          OR u.company_name LIKE ?
+        )
+      `;
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
+
+        const [rows] = await db.promise().query(
+            `
       SELECT 
         p.id,
         p.name,
         p.category,
         p.city,
+        p.status,
         p.created_at,
         u.company_name AS supplier_name
-
       FROM properties p
       JOIN users u ON p.supplier_id = u.id
-
+      ${where}
       ORDER BY p.id DESC
-    `);
+      LIMIT ? OFFSET ?
+      `,
+            [...params, Number(limit), Number(offset)]
+        );
 
-        res.json(rows);
+        const [count] = await db.promise().query(
+            `
+      SELECT COUNT(*) as total
+      FROM properties p
+      JOIN users u ON p.supplier_id = u.id
+      ${where}
+      `,
+            params
+        );
+
+        res.json({
+            data: rows,
+            total: count[0].total
+        });
 
     } catch (err) {
-        console.error(err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+// ================= ADMIN UPDATE PROPERTY STATUS =================
+router.put("/property-status/:id", async (req, res) => {
+    const { status } = req.body;
+
+    if (!["Approved", "Rejected"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+    }
+
+    try {
+        await db.promise().query(
+            "UPDATE properties SET status = ? WHERE id = ?",
+            [status, req.params.id]
+        );
+
+        res.json({ success: true });
+    } catch (err) {
         res.status(500).json({ message: "Server error" });
     }
 });
@@ -315,6 +312,46 @@ router.put("/confirm/:bookingNumber", async (req, res) => {
         );
 
         res.json({ message: "Booking confirmed" });
+    } catch (err) {
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+router.get("/property/:id", async (req, res) => {
+    try {
+
+        const [rows] = await db.promise().query(`
+      SELECT 
+        p.*,
+        u.company_name AS supplier_name,
+        u.email AS supplier_email,
+        u.mobile AS supplier_mobile
+      FROM properties p
+      JOIN users u ON p.supplier_id = u.id
+      WHERE p.id = ?
+    `, [req.params.id]);
+
+        if (!rows.length) {
+            return res.status(404).json(null);
+        }
+
+        res.json(rows[0]);
+
+    } catch (err) {
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+router.delete("/delete-property/:id", async (req, res) => {
+    try {
+
+        await db.promise().query(
+            "DELETE FROM properties WHERE id = ?",
+            [req.params.id]
+        );
+
+        res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ message: "Server error" });
     }
