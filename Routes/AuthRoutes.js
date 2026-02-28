@@ -55,7 +55,13 @@ router.post("/register", (req, res) => {
     ],
     (err) => {
       if (err) {
-        return res.status(400).json({ message: "User already exists" });
+        console.log("REGISTER ERROR:", err);
+
+        if (err.code === "ER_DUP_ENTRY") {
+          return res.status(400).json({ message: "Email already registered" });
+        }
+
+        return res.status(500).json({ message: "Database error" });
       }
       res.json({ message: "Registration submitted for admin approval" });
     }
