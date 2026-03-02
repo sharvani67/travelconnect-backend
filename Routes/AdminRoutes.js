@@ -78,38 +78,147 @@ router.post("/approve/:id", (req, res) => {
 });
 
 
+router.post("/create-user", async (req, res) => {
+  const {
+    role,
+    supplier_type,
+    company_name,
+    contact_person,
+    email,
+    mobile,
+    country,
+    city,
+    pincode,
+    gst_applicable,
+    gst_number,
+    agent_type
+  } = req.body;
 
-async function sendMail(toEmail, password, companyName) {
+  if (!role || !company_name || !contact_person || !email || !mobile) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
 
-    const mailOptions = {
-        from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
-        to: toEmail,
-        subject: "Your Account Has Been Approved 🎉",
-        html: `
-            <div style="font-family: Arial; padding:20px;">
-                <h2>Hello ${companyName},</h2>
-                <p>Your account has been <b>approved</b> by admin.</p>
-                
-                <h3>Login Credentials:</h3>
-                <p><b>Email:</b> ${toEmail}</p>
-                <p><b>Password:</b> ${password}</p>
+  if (role === "agent" && !agent_type) {
+    return res.status(400).json({ message: "Agent type required" });
+  }
 
-                <p>Please login and change your password after first login.</p>
+  // 🔐 Generate Password
+  const rawPassword =
+    email.split("@")[0].slice(0, 4).toUpperCase() +
+    mobile.slice(-4);
 
-                <br/>
-                <a href="http://localhost:5173/login"
-                   style="background:#16a34a;color:white;padding:10px 20px;
-                   text-decoration:none;border-radius:5px;">
-                   Login Now
-                </a>
+  const hashed = await bcrypt.hash(rawPassword, 10);
 
-                <br/><br/>
-                <p>Regards,<br/>B2B Partners Team</p>
-            </div>
-        `
-    };
+  const generateAndInsert = (agentCode = null) => {
+    const sql = `
+      INSERT INTO users
+      (role, agent_type, agent_code, supplier_type,
+       company_name, contact_person, email,
+       mobile, country, city, pincode,
+       gst_applicable, gst_number,
+       password, admin_password,
+       status, registration_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
+    `;
 
-    await transporter.sendMail(mailOptions);
+    db.query(
+      sql,
+      [
+        role,
+        agent_type || null,
+        agentCode,
+        supplier_type || null,
+        company_name,
+        contact_person,
+        email,
+        mobile,
+        country,
+        city,
+        pincode,
+        gst_applicable,
+        gst_number,
+        hashed,
+        rawPassword
+      ],
+      async (err) => {
+        if (err) return res.status(400).json({ message: "Database error" });
+
+        await sendMail(email, rawPassword, company_name, agentCode);
+
+        res.json({ message: "User created & credentials sent" });
+      }
+    );
+  };
+
+  // 🔥 If Agent → Generate Code
+  if (role === "agent") {
+    const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+
+    const codeSql = `
+      SELECT agent_code FROM users
+      WHERE agent_code LIKE ?
+      ORDER BY id DESC LIMIT 1
+    `;
+
+    db.query(codeSql, [`${prefix}%`], (err, rows) => {
+      if (err) return res.status(500).json({ message: "Database error" });
+
+      let nextNumber = 1;
+
+      if (rows.length > 0 && rows[0].agent_code) {
+        const numberPart = parseInt(
+          rows[0].agent_code.replace(prefix, "")
+        );
+        nextNumber = numberPart + 1;
+      }
+
+      const newCode =
+        prefix + String(nextNumber).padStart(6, "0");
+
+      generateAndInsert(newCode);
+    });
+  } else {
+    generateAndInsert();
+  }
+});
+
+async function sendMail(toEmail, password, companyName, agentCode) {
+
+  const mailOptions = {
+    from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+    to: toEmail,
+    subject: "Your Account Has Been Created 🎉",
+    html: `
+      <div style="font-family: Arial; padding:20px;">
+        <h2>Hello ${companyName},</h2>
+        <p>Your account has been <b>created by admin</b>.</p>
+
+        <h3>Login Credentials:</h3>
+        <p><b>Email:</b> ${toEmail}</p>
+        <p><b>Password:</b> ${password}</p>
+
+        ${
+          agentCode
+            ? `<p><b>Agent Code:</b> ${agentCode}</p>`
+            : ""
+        }
+
+        <p>Please login and change your password after first login.</p>
+
+        <br/>
+        <a href="http://localhost:5173/login"
+           style="background:#16a34a;color:white;padding:10px 20px;
+           text-decoration:none;border-radius:5px;">
+           Login Now
+        </a>
+
+        <br/><br/>
+        <p>Regards,<br/>B2B Partners Team</p>
+      </div>
+    `
+  };
+
+  await transporter.sendMail(mailOptions);
 }
 
 // ================= UPDATE STATUS =================
