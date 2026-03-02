@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require("../Config/db");
 const bcrypt = require("bcryptjs");
 
+
 // ================= REGISTER =================
 router.post("/register", (req, res) => {
   const {
@@ -17,7 +18,10 @@ router.post("/register", (req, res) => {
     supplier_type,
     gst_applicable,
     gst_number,
+    agent_type,
+    allow_duplicate
   } = req.body;
+
   if (!role || !company_name || !contact_person || !email || !mobile) {
     return res.status(400).json({ message: "Missing required fields" });
   }
@@ -29,43 +33,96 @@ router.post("/register", (req, res) => {
   if (role === "supplier" && !supplier_type) {
     return res.status(400).json({ message: "Supplier type required" });
   }
-  const sql = `
-  
-    INSERT INTO users
-    (role, supplier_type, company_name, contact_person, email,
-     mobile, country, city, pincode,
-     gst_applicable, gst_number, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-  `;
 
-  db.query(
-    sql,
-    [
-      role,
-      supplier_type,
-      company_name,
-      contact_person,
-      email,
-      mobile,
-      country,
-      city,
-      pincode,
-      gst_applicable,
-      gst_number,
-    ],
-    (err) => {
-      if (err) {
-        console.log("REGISTER ERROR:", err);
+  if (role === "agent" && !agent_type) {
+    return res.status(400).json({ message: "Agent type required" });
+  }
 
-        if (err.code === "ER_DUP_ENTRY") {
-          return res.status(400).json({ message: "Email already registered" });
+  // 🔍 STEP 1: Check duplicate company name
+  const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
+
+  db.query(checkNameSql, [company_name], (err, existing) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+
+    if (existing.length > 0 && !allow_duplicate) {
+      return res.status(409).json({
+        duplicate: true,
+        message: "Company name already exists. Do you want to continue?"
+      });
+    }
+
+    // 🔥 STEP 2: Generate Agent Code (if agent)
+    const generateAndInsert = (agentCode = null) => {
+      const sql = `
+        INSERT INTO users
+        (role, agent_type, agent_code, supplier_type, company_name, contact_person,
+         email, mobile, country, city, pincode,
+         gst_applicable, gst_number, status, registration_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
+      `;
+
+      db.query(
+        sql,
+        [
+          role,
+          agent_type || null,
+          agentCode,
+          supplier_type || null,
+          company_name,
+          contact_person,
+          email,
+          mobile,
+          country,
+          city,
+          pincode,
+          gst_applicable,
+          gst_number,
+        ],
+        (err) => {
+          if (err) {
+            if (err.code === "ER_DUP_ENTRY") {
+              return res.status(400).json({ message: "Email already registered" });
+            }
+            return res.status(500).json({ message: "Database error" });
+          }
+
+          res.json({
+            message: "Registration submitted for admin approval"
+          });
+        }
+      );
+    };
+
+    if (role === "agent") {
+      const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+
+      const codeSql = `
+        SELECT agent_code FROM users
+        WHERE agent_code LIKE ?
+        ORDER BY id DESC LIMIT 1
+      `;
+
+      db.query(codeSql, [`${prefix}%`], (err, rows) => {
+        if (err) return res.status(500).json({ message: "Database error" });
+
+        let nextNumber = 1;
+
+        if (rows.length > 0) {
+          const lastCode = rows[0].agent_code;
+          const numberPart = parseInt(lastCode.replace(prefix, ""));
+          nextNumber = numberPart + 1;
         }
 
-        return res.status(500).json({ message: "Database error" });
-      }
-      res.json({ message: "Registration submitted for admin approval" });
+        const newCode =
+          prefix + String(nextNumber).padStart(6, "0");
+
+        generateAndInsert(newCode);
+      });
+
+    } else {
+      generateAndInsert();
     }
-  );
+  });
 });
 
 // ================= LOGIN =================
