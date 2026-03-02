@@ -9,6 +9,7 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  port: 3307,
 });
 
 console.log("MySQL Pool Connected...");
