@@ -221,6 +221,137 @@ async function sendMail(toEmail, password, companyName, agentCode) {
   await transporter.sendMail(mailOptions);
 }
 
+const crypto = require("crypto");
+
+// ================= SEND RESET OTP =================
+// ================= SEND RESET OTP =================
+router.post("/send-reset-otp", (req, res) => {
+  const { email } = req.body;
+
+  if (!email)
+    return res.status(400).json({ message: "Email required" });
+
+  db.query(
+    "SELECT id, company_name, status FROM users WHERE email=?",
+    [email],
+    async (err, rows) => {
+
+      if (err)
+        return res.status(500).json({ message: "Database error" });
+
+      if (!rows.length)
+        return res.status(404).json({ message: "User not found" });
+
+      const user = rows[0];
+
+      // 🔥 NEW CONDITION ADDED
+      if (user.status !== "approved") {
+        return res.status(403).json({
+          message: "Your account is not approved yet. Please contact admin."
+        });
+      }
+
+      // 🔐 Generate 6 digit OTP
+      const otp = crypto.randomInt(100000, 999999).toString();
+      const expiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      db.query(
+        "UPDATE users SET reset_otp=?, reset_otp_expiry=? WHERE email=?",
+        [otp, expiry, email],
+        async (err) => {
+
+          if (err)
+            return res.status(500).json({ message: "Database error" });
+
+          try {
+            await transporter.sendMail({
+              from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+              to: email,
+              subject: "Password Reset OTP 🔐",
+              html: `
+                <div style="font-family: Arial; padding:20px;">
+                  <h2>Hello ${user.company_name},</h2>
+                  <p>Your password reset OTP is:</p>
+                  
+                  <h1 style="letter-spacing:5px;">${otp}</h1>
+                  
+                  <p>This OTP will expire in <b>10 minutes</b>.</p>
+                  <p>If you did not request this, please ignore this email.</p>
+                  
+                  <br/>
+                  <p>Regards,<br/>B2B Partners Team</p>
+                </div>
+              `,
+            });
+
+            res.json({ message: "OTP sent to your email" });
+
+          } catch (error) {
+            console.error(error);
+            res.status(500).json({ message: "Failed to send OTP email" });
+          }
+        }
+      );
+    }
+  );
+});
+
+
+// ================= RESET PASSWORD =================
+router.post("/reset-password", async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword)
+    return res.status(400).json({ message: "All fields required" });
+
+  db.query(
+    "SELECT id, role, reset_otp, reset_otp_expiry FROM users WHERE email=?",
+    [email],
+    async (err, rows) => {
+      if (err) return res.status(500).json({ message: "Database error" });
+      if (!rows.length)
+        return res.status(404).json({ message: "User not found" });
+
+      const user = rows[0];
+
+      // ❌ Invalid OTP
+      if (user.reset_otp !== otp)
+        return res.status(400).json({ message: "Invalid OTP" });
+
+      // ❌ Expired OTP
+      if (new Date(user.reset_otp_expiry) < new Date())
+        return res.status(400).json({ message: "OTP expired" });
+
+      // 🔐 Hash new password
+      const hashed = await bcrypt.hash(newPassword, 10);
+
+      db.query(
+        `UPDATE users 
+         SET password=?, 
+             admin_password=NULL,
+             reset_otp=NULL,
+             reset_otp_expiry=NULL
+         WHERE email=?`,
+        [hashed, email],
+        (err) => {
+          if (err)
+            return res.status(500).json({ message: "Database error" });
+
+          res.json({
+            message: "Password reset successful",
+            user: {
+              id: user.id,
+              role: user.role,
+              email: email
+            }
+          });
+        }
+      );
+    }
+  );
+});
+
+
 // ================= UPDATE STATUS =================
 router.put("/update-status/:id", (req, res) => {
     const { status } = req.body;

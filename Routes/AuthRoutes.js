@@ -151,6 +151,13 @@ router.post("/login", (req, res) => {
         });
       }
 
+      if (user.admin_password && user.admin_password.trim() !== "") {
+  return res.status(200).json({
+    firstLogin: true,
+    message: "Please change your password"
+  });
+}
+
       res.json({
         message: "Login successful",
         user: {
