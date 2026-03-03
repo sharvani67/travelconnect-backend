@@ -91,8 +91,8 @@ router.post("/add-property", uploadFields, async (req, res) => {
             `INSERT INTO properties
       (name, category, city, area, pincode, address, landmark,
        contact, email, supplier_id,
-       hotel_remarks, registration_certificate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        registration_certificate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 category,
@@ -104,7 +104,6 @@ router.post("/add-property", uploadFields, async (req, res) => {
                 contact || "",
                 email || "",
                 supplier_id,
-                parsedPolicies.hotel_remarks || "",
                 req.files?.certificate?.[0]?.filename || ""
             ]
         );
