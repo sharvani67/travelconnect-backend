@@ -39,6 +39,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
         landmark,
         contact,
         email,
+        total_rooms,
         rooms,
         policies,
         staff,
@@ -90,9 +91,9 @@ router.post("/add-property", uploadFields, async (req, res) => {
         const [propertyResult] = await connection.query(
             `INSERT INTO properties
       (name, category, city, area, pincode, address, landmark,
-       contact, email, supplier_id,
-        registration_certificate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       contact, email, supplier_id, total_rooms,
+       hotel_remarks, registration_certificate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 category,
@@ -103,6 +104,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
                 landmark || "",
                 contact || "",
                 email || "",
+                Number(total_rooms) || 0,
                 supplier_id,
                 req.files?.certificate?.[0]?.filename || ""
             ]
@@ -241,15 +243,14 @@ router.post("/add-property", uploadFields, async (req, res) => {
 
             await connection.query(
                 `INSERT INTO property_staff
-         (property_id, name, designation, mobile,
-          alternate_mobile, email, photo)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (property_id, name, designation, phones,
+           email, photo)
+         VALUES (?, ?, ?, ?, ?, ?)`,
                 [
                     propertyId,
                     parsedStaff[i].name || "",
                     parsedStaff[i].designation || "",
-                    parsedStaff[i].mobile || "",
-                    parsedStaff[i].alternate_mobile || "",
+                    JSON.stringify(parsedStaff[i].phones || []),
                     parsedStaff[i].email || "",
                     photoFile
                 ]
@@ -482,6 +483,7 @@ router.get("/supplier/:supplierId/list", (req, res) => {
       AND rr.plan = 'CP'
 
     WHERE p.supplier_id = ?
+AND p.status != 'Deleted'
 
     GROUP BY 
       p.id, p.name, p.category, p.area, p.city, p.pincode, img.image_path
@@ -551,6 +553,15 @@ router.get("/:id/full", async (req, res) => {
             `SELECT * FROM properties WHERE id = ?`,
             [propertyId]
         );
+
+        if (!property.length) {
+            return res.status(404).json({ message: "Property not found" });
+        }
+
+        // ❗ If deleted, block public access
+        if (property[0].status === "Deleted") {
+            return res.status(403).json({ message: "Property deleted" });
+        }
 
         if (!property.length) {
             return res.status(404).json({ message: "Property not found" });
@@ -656,4 +667,39 @@ router.get("/:id/full", async (req, res) => {
 });
 
 
+// ================== SOFT DELETE PROPERTY ==================
+router.put("/:id/delete", async (req, res) => {
+
+    const propertyId = req.params.id;
+
+    try {
+        await db.promise().query(
+            `UPDATE properties 
+             SET status = 'Deleted' 
+             WHERE id = ?`,
+            [propertyId]
+        );
+
+        res.json({ success: true });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to delete" });
+    }
+});
+
+
+router.put("/staff/:id/delete", async (req, res) => {
+
+    const staffId = req.params.id;
+
+    await db.promise().query(
+        `UPDATE property_staff 
+         SET is_active = 0 
+         WHERE id = ?`,
+        [staffId]
+    );
+
+    res.json({ success: true });
+});
 module.exports = router;

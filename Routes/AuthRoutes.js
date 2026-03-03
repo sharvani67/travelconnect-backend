@@ -199,5 +199,16 @@ router.post("/admin-login", (req, res) => {
   );
 });
 
+// ================= GET CATEGORIES =================
+router.get("/categories", (req, res) => {
+  const sql = "SELECT id, category_name FROM categories";
 
+  db.query(sql, (err, results) => {
+    if (err) {
+      return res.status(500).json({ message: "Database error" });
+    }
+
+    res.json(results);
+  });
+});
 module.exports = router;

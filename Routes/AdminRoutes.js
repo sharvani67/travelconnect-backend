@@ -5,6 +5,88 @@ const bcrypt = require("bcryptjs");
 const transporter = require("../utils/mailer");
 
 
+// ================= ADMIN DASHBOARD ADVANCED STATS =================
+router.get("/dashboard-stats", async (req, res) => {
+    try {
+        const [suppliers] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM users WHERE role = 'supplier'"
+        );
+
+        const [agents] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM users WHERE role = 'agent'"
+        );
+
+
+        // Approved Suppliers
+        const [approvedSuppliers] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM users WHERE role='supplier' AND status='approved'"
+        );
+
+        // Pending Suppliers
+        const [pendingSuppliers] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM users WHERE role='supplier' AND status='pending'"
+        );
+
+        // Today New Registrations
+        const [todayRegistrations] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM users WHERE DATE(created_at) = CURDATE()"
+        );
+
+        // Total Properties
+        const [totalProperties] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM properties"
+        );
+
+        // Total Bookings
+        const [totalBookings] = await db.promise().query(
+            "SELECT COUNT(*) as total FROM bookings"
+        );
+
+        // Total Revenue (Only Confirmed bookings)
+        const [totalRevenue] = await db.promise().query(
+            "SELECT IFNULL(SUM(total_amount),0) as total FROM bookings WHERE status='Confirmed'"
+        );
+
+        res.json({
+            suppliers: suppliers[0].total,
+            agents: agents[0].total,
+            approvedSuppliers: approvedSuppliers[0].total,
+            pendingSuppliers: pendingSuppliers[0].total,
+            todayRegistrations: todayRegistrations[0].total,
+            totalProperties: totalProperties[0].total,
+            totalBookings: totalBookings[0].total,
+            totalRevenue: totalRevenue[0].total
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+// ================= MONTHLY DEALS & REVENUE =================
+router.get("/dashboard-monthly", async (req, res) => {
+    try {
+
+        const [rows] = await db.promise().query(`
+            SELECT 
+                DATE_FORMAT(created_at, '%b') as month,
+                COUNT(*) as deals,
+                IFNULL(SUM(total_amount),0) as revenue
+            FROM bookings
+            WHERE status = 'Confirmed'
+            GROUP BY MONTH(created_at)
+            ORDER BY MONTH(created_at)
+        `);
+
+        res.json(rows);
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
 // ================= GET ALL USERS =================
 router.get("/users", (req, res) => {
     db.query("SELECT * FROM users ORDER BY created_at DESC", (err, rows) => {
@@ -79,38 +161,38 @@ router.post("/approve/:id", (req, res) => {
 
 
 router.post("/create-user", async (req, res) => {
-  const {
-    role,
-    supplier_type,
-    company_name,
-    contact_person,
-    email,
-    mobile,
-    country,
-    city,
-    pincode,
-    gst_applicable,
-    gst_number,
-    agent_type
-  } = req.body;
+    const {
+        role,
+        supplier_type,
+        company_name,
+        contact_person,
+        email,
+        mobile,
+        country,
+        city,
+        pincode,
+        gst_applicable,
+        gst_number,
+        agent_type
+    } = req.body;
 
-  if (!role || !company_name || !contact_person || !email || !mobile) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
+    if (!role || !company_name || !contact_person || !email || !mobile) {
+        return res.status(400).json({ message: "Missing required fields" });
+    }
 
-  if (role === "agent" && !agent_type) {
-    return res.status(400).json({ message: "Agent type required" });
-  }
+    if (role === "agent" && !agent_type) {
+        return res.status(400).json({ message: "Agent type required" });
+    }
 
-  // 🔐 Generate Password
-  const rawPassword =
-    email.split("@")[0].slice(0, 4).toUpperCase() +
-    mobile.slice(-4);
+    // 🔐 Generate Password
+    const rawPassword =
+        email.split("@")[0].slice(0, 4).toUpperCase() +
+        mobile.slice(-4);
 
-  const hashed = await bcrypt.hash(rawPassword, 10);
+    const hashed = await bcrypt.hash(rawPassword, 10);
 
-  const generateAndInsert = (agentCode = null) => {
-    const sql = `
+    const generateAndInsert = (agentCode = null) => {
+        const sql = `
       INSERT INTO users
       (role, agent_type, agent_code, supplier_type,
        company_name, contact_person, email,
@@ -121,74 +203,74 @@ router.post("/create-user", async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
     `;
 
-    db.query(
-      sql,
-      [
-        role,
-        agent_type || null,
-        agentCode,
-        supplier_type || null,
-        company_name,
-        contact_person,
-        email,
-        mobile,
-        country,
-        city,
-        pincode,
-        gst_applicable,
-        gst_number,
-        hashed,
-        rawPassword
-      ],
-      async (err) => {
-        if (err) return res.status(400).json({ message: "Database error" });
+        db.query(
+            sql,
+            [
+                role,
+                agent_type || null,
+                agentCode,
+                supplier_type || null,
+                company_name,
+                contact_person,
+                email,
+                mobile,
+                country,
+                city,
+                pincode,
+                gst_applicable,
+                gst_number,
+                hashed,
+                rawPassword
+            ],
+            async (err) => {
+                if (err) return res.status(400).json({ message: "Database error" });
 
-        await sendMail(email, rawPassword, company_name, agentCode);
+                await sendMail(email, rawPassword, company_name, agentCode);
 
-        res.json({ message: "User created & credentials sent" });
-      }
-    );
-  };
+                res.json({ message: "User created & credentials sent" });
+            }
+        );
+    };
 
-  // 🔥 If Agent → Generate Code
-  if (role === "agent") {
-    const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+    // 🔥 If Agent → Generate Code
+    if (role === "agent") {
+        const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-    const codeSql = `
+        const codeSql = `
       SELECT agent_code FROM users
       WHERE agent_code LIKE ?
       ORDER BY id DESC LIMIT 1
     `;
 
-    db.query(codeSql, [`${prefix}%`], (err, rows) => {
-      if (err) return res.status(500).json({ message: "Database error" });
+        db.query(codeSql, [`${prefix}%`], (err, rows) => {
+            if (err) return res.status(500).json({ message: "Database error" });
 
-      let nextNumber = 1;
+            let nextNumber = 1;
 
-      if (rows.length > 0 && rows[0].agent_code) {
-        const numberPart = parseInt(
-          rows[0].agent_code.replace(prefix, "")
-        );
-        nextNumber = numberPart + 1;
-      }
+            if (rows.length > 0 && rows[0].agent_code) {
+                const numberPart = parseInt(
+                    rows[0].agent_code.replace(prefix, "")
+                );
+                nextNumber = numberPart + 1;
+            }
 
-      const newCode =
-        prefix + String(nextNumber).padStart(6, "0");
+            const newCode =
+                prefix + String(nextNumber).padStart(6, "0");
 
-      generateAndInsert(newCode);
-    });
-  } else {
-    generateAndInsert();
-  }
+            generateAndInsert(newCode);
+        });
+    } else {
+        generateAndInsert();
+    }
 });
 
 async function sendMail(toEmail, password, companyName, agentCode) {
 
-  const mailOptions = {
-    from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
-    to: toEmail,
-    subject: "Your Account Has Been Created 🎉",
-    html: `
+    const mailOptions = {
+        from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+        to: toEmail,
+        subject: "Your Account Has Been Created 🎉",
+        html: `
       <div style="font-family: Arial; padding:20px;">
         <h2>Hello ${companyName},</h2>
         <p>Your account has been <b>created by admin</b>.</p>
@@ -197,11 +279,10 @@ async function sendMail(toEmail, password, companyName, agentCode) {
         <p><b>Email:</b> ${toEmail}</p>
         <p><b>Password:</b> ${password}</p>
 
-        ${
-          agentCode
-            ? `<p><b>Agent Code:</b> ${agentCode}</p>`
-            : ""
-        }
+        ${agentCode
+                ? `<p><b>Agent Code:</b> ${agentCode}</p>`
+                : ""
+            }
 
         <p>Please login and change your password after first login.</p>
 
@@ -216,9 +297,9 @@ async function sendMail(toEmail, password, companyName, agentCode) {
         <p>Regards,<br/>B2B Partners Team</p>
       </div>
     `
-  };
+    };
 
-  await transporter.sendMail(mailOptions);
+    await transporter.sendMail(mailOptions);
 }
 
 // ================= UPDATE STATUS =================
@@ -333,13 +414,17 @@ router.get("/bookings", async (req, res) => {
 // ================== ADMIN: GET ALL PROPERTIES ==================
 router.get("/properties", async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = "" } = req.query;
+        let { page = 1, limit = 10, search = "", status = "" } = req.query;
+
+        page = Number(page);
+        limit = Number(limit);
 
         const offset = (page - 1) * limit;
 
         let where = "WHERE 1=1";
         let params = [];
 
+        // 🔎 Search filter
         if (search) {
             where += `
         AND (
@@ -351,6 +436,13 @@ router.get("/properties", async (req, res) => {
             params.push(`%${search}%`, `%${search}%`, `%${search}%`);
         }
 
+        // ✅ Status filter
+        if (status) {
+            where += ` AND p.status = ?`;
+            params.push(status);
+        }
+
+        // 📌 Fetch paginated data
         const [rows] = await db.promise().query(
             `
       SELECT 
@@ -367,9 +459,10 @@ router.get("/properties", async (req, res) => {
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
       `,
-            [...params, Number(limit), Number(offset)]
+            [...params, limit, offset]
         );
 
+        // 📌 Count total
         const [count] = await db.promise().query(
             `
       SELECT COUNT(*) as total
@@ -386,6 +479,7 @@ router.get("/properties", async (req, res) => {
         });
 
     } catch (err) {
+        console.error(err);
         res.status(500).json({ message: "Server error" });
     }
 });
@@ -394,7 +488,15 @@ router.get("/properties", async (req, res) => {
 router.put("/property-status/:id", async (req, res) => {
     const { status } = req.body;
 
-    if (!["Approved", "Rejected"].includes(status)) {
+    const allowedStatuses = [
+        "Pending",
+        "Approved",
+        "Rejected",
+        "Inactive",
+        "Deleted"
+    ];
+
+    if (!allowedStatuses.includes(status)) {
         return res.status(400).json({ message: "Invalid status" });
     }
 
@@ -450,6 +552,126 @@ router.get("/property/:id", async (req, res) => {
         res.status(500).json({ message: "Server error" });
     }
 });
+
+router.get("/property/:id/full", async (req, res) => {
+
+    const propertyId = req.params.id;
+
+    try {
+
+        // 1️⃣ Property
+        const [property] = await db.promise().query(
+            `SELECT * FROM properties WHERE id = ?`,
+            [propertyId]
+        );
+
+        if (!property.length) {
+            return res.status(404).json({ message: "Property not found" });
+        }
+
+        if (!property.length) {
+            return res.status(404).json({ message: "Property not found" });
+        }
+
+        // 2️⃣ Images
+        const [images] = await db.promise().query(
+            `SELECT * FROM property_images WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 3️⃣ Videos
+        const [videos] = await db.promise().query(
+            `SELECT * FROM property_videos WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 4️⃣ Rooms
+        const [rooms] = await db.promise().query(
+            `SELECT * FROM property_rooms WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 5️⃣ Rates
+        const [rates] = await db.promise().query(
+            `
+            SELECT r.*
+            FROM property_room_rates r
+            JOIN property_rooms pr ON r.room_id = pr.id
+            WHERE pr.property_id = ?
+            `,
+            [propertyId]
+        );
+
+        // 6️⃣ Policies
+        const [policies] = await db.promise().query(
+            `SELECT * FROM property_policies WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 7️⃣ Cancellation Rules
+        const [cancellationRules] = await db.promise().query(
+            `SELECT * FROM property_cancellation_rules WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 8️⃣ Staff
+        const [staff] = await db.promise().query(
+            `SELECT * FROM property_staff WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 9️⃣ Amenities
+        const [amenities] = await db.promise().query(
+            `SELECT * FROM property_amenities WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 🔟 Sightseeing
+        const [sightseeing] = await db.promise().query(
+            `SELECT * FROM property_sightseeing WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 11️⃣ FAQs
+        const [faqs] = await db.promise().query(
+            `SELECT * FROM property_faqs WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 12️⃣ Check-in Data
+        const [checkin] = await db.promise().query(
+            `SELECT * FROM property_checkin WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        // 13️⃣ Bank Details
+        const [bank] = await db.promise().query(
+            `SELECT * FROM property_bank_details WHERE property_id = ?`,
+            [propertyId]
+        );
+
+        res.json({
+            property: property[0],
+            images,
+            videos,
+            rooms,
+            rates,
+            policies: policies[0] || {},
+            cancellationRules,
+            staff,
+            amenities,
+            sightseeing,
+            faqs,
+            checkin: checkin[0] || {},
+            bank: bank[0] || {}
+        });
+
+    } catch (err) {
+        console.error("FULL PROPERTY FETCH ERROR:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
 
 router.delete("/delete-property/:id", async (req, res) => {
     try {
