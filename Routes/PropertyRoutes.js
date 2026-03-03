@@ -117,7 +117,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
                 propertyId,
                 file.filename,
                 index == Number(coverIndex) ? 1 : 0
-            ]); rackRate
+            ]);
 
             await connection.query(
                 `INSERT INTO property_images
