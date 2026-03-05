@@ -262,4 +262,25 @@ router.get("/categories", (req, res) => {
     res.json(results);
   });
 });
+
+
+
+// ================= GET AGENT COUNT AND SUPPLIER COUNT =================
+router.get("/count", (req, res) => {
+  const sql = `
+    SELECT 
+      COUNT(CASE WHEN role = 'agent' THEN 1 END) AS total_agents,
+      COUNT(CASE WHEN role = 'supplier' THEN 1 END) AS total_suppliers
+    FROM users
+  `;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      return res.status(500).json({ message: "Database error" });
+    }
+
+    res.json(result[0]);
+  });
+});
+
 module.exports = router;
