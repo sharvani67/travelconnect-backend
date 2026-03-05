@@ -40,6 +40,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
         contact,
         email,
         total_rooms,
+        hotel_remarks,
         rooms,
         policies,
         staff,
@@ -90,10 +91,10 @@ router.post("/add-property", uploadFields, async (req, res) => {
         // 1️⃣ INSERT PROPERTY
         const [propertyResult] = await connection.query(
             `INSERT INTO properties
-      (name, category, city, area, pincode, address, landmark,
-       contact, email, supplier_id, total_rooms,
-       hotel_remarks, registration_certificate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+(name, category, city, area, pincode, address, landmark,
+ contact, email, supplier_id, total_rooms,
+ hotel_remarks, registration_certificate, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 category,
@@ -104,9 +105,11 @@ router.post("/add-property", uploadFields, async (req, res) => {
                 landmark || "",
                 contact || "",
                 email || "",
-                Number(total_rooms) || 0,
                 supplier_id,
-                req.files?.certificate?.[0]?.filename || ""
+                Number(total_rooms) || 0,
+                hotel_remarks || "", // ADD THIS
+                req.files?.certificate?.[0]?.filename || "",
+                "pending"
             ]
         );
 
@@ -205,7 +208,6 @@ router.post("/add-property", uploadFields, async (req, res) => {
         cancellation_policy,
         child_policy,
         pet_policy,
-        id_proof_required,
         terms)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
@@ -214,7 +216,6 @@ router.post("/add-property", uploadFields, async (req, res) => {
                 parsedPolicies.cancellation_policy || "",
                 parsedPolicies.child_policy || "",
                 parsedPolicies.pet_policy || "",
-                parsedPolicies.id_proof_required ? 1 : 0,
                 parsedPolicies.terms || ""
             ]
         );
@@ -386,7 +387,7 @@ router.get("/", (req, res) => {
     LEFT JOIN property_room_rates rr
       ON pr.id = rr.room_id
       AND rr.rate_type = 'weekday'
-      AND rr.plan = 'CP'
+      AND rr.plan = 'EP'
 
     WHERE p.status = 'Approved'   -- ✅ IMPORTANT
 
@@ -480,7 +481,7 @@ router.get("/supplier/:supplierId/list", (req, res) => {
     LEFT JOIN property_room_rates rr
       ON pr.id = rr.room_id
       AND rr.rate_type = 'weekday'
-      AND rr.plan = 'CP'
+      AND rr.plan = 'EP'
 
     WHERE p.supplier_id = ?
 AND p.status != 'Deleted'
