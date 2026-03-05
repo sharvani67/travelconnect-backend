@@ -22,6 +22,7 @@ router.post("/register", (req, res) => {
     allow_duplicate
   } = req.body;
 
+  // ================= VALIDATION =================
   if (!role || !company_name || !contact_person || !email || !mobile) {
     return res.status(400).json({ message: "Missing required fields" });
   }
@@ -38,11 +39,15 @@ router.post("/register", (req, res) => {
     return res.status(400).json({ message: "Agent type required" });
   }
 
-  // 🔍 STEP 1: Check duplicate company name
+  // ================= DUPLICATE COMPANY CHECK =================
   const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
 
   db.query(checkNameSql, [company_name], (err, existing) => {
-    if (err) return res.status(500).json({ message: "Database error" });
+
+    if (err) {
+      console.error("Company check error:", err);
+      return res.status(500).json({ message: "Database error" });
+    }
 
     if (existing.length > 0 && !allow_duplicate) {
       return res.status(409).json({
@@ -51,89 +56,115 @@ router.post("/register", (req, res) => {
       });
     }
 
-    // 🔥 STEP 2: Generate Agent Code (if agent)
-    const generateAndInsert = (agentCode = null) => {
-      const sql = `
-        INSERT INTO users
-        (role, agent_type, agent_code, supplier_type, company_name, contact_person,
-         email, mobile, country, city, pincode,
-         gst_applicable, gst_number, status, registration_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
-      `;
+    // ================= EMAIL DUPLICATE CHECK =================
+    const checkEmailSql = `SELECT id FROM users WHERE email = ?`;
 
-      db.query(
-        sql,
-        [
+    db.query(checkEmailSql, [email], (err, emailRows) => {
+
+      if (err) {
+        console.error("Email check error:", err);
+        return res.status(500).json({ message: "Database error" });
+      }
+
+      if (emailRows.length > 0) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+
+      // ================= INSERT FUNCTION =================
+      const insertUser = (agentCode = null) => {
+
+        const sql = `
+          INSERT INTO users
+          (role, agent_type, agent_code, supplier_type, company_name,
+           contact_person, email, mobile, country, city, pincode,
+           gst_applicable, gst_number, status, registration_type)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
+        `;
+
+        const values = [
           role,
           agent_type || null,
-          agentCode,
+          agentCode || null,
           supplier_type || null,
           company_name,
           contact_person,
           email,
           mobile,
-          country,
-          city,
-          pincode,
-          gst_applicable,
-          gst_number,
-        ],
-        (err) => {
+          country || null,
+          city || null,
+          pincode || null,
+          gst_applicable || "no",
+          gst_number || null
+        ];
+
+        db.query(sql, values, (err) => {
+
           if (err) {
-            if (err.code === "ER_DUP_ENTRY") {
-              return res.status(400).json({ message: "Email already registered" });
-            }
+            console.error("Insert user error:", err);
             return res.status(500).json({ message: "Database error" });
           }
 
-          res.json({
+          return res.json({
             message: "Registration submitted for admin approval"
           });
-        }
-      );
-    };
+        });
+      };
 
-    if (role === "agent") {
-      const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+      // ================= AGENT CODE GENERATION =================
+      if (role === "agent") {
 
-      const codeSql = `
-        SELECT agent_code FROM users
-        WHERE agent_code LIKE ?
-        ORDER BY id DESC LIMIT 1
-      `;
+        const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-      db.query(codeSql, [`${prefix}%`], (err, rows) => {
-        if (err) return res.status(500).json({ message: "Database error" });
+        const codeSql = `
+          SELECT agent_code FROM users
+          WHERE agent_code LIKE ?
+          ORDER BY id DESC
+          LIMIT 1
+        `;
 
-        let nextNumber = 1;
+        db.query(codeSql, [`${prefix}%`], (err, rows) => {
 
-        if (rows.length > 0) {
-          const lastCode = rows[0].agent_code;
-          const numberPart = parseInt(lastCode.replace(prefix, ""));
-          nextNumber = numberPart + 1;
-        }
+          if (err) {
+            console.error("Agent code error:", err);
+            return res.status(500).json({ message: "Database error" });
+          }
 
-        const newCode =
-          prefix + String(nextNumber).padStart(6, "0");
+          let nextNumber = 1;
 
-        generateAndInsert(newCode);
-      });
+          if (rows.length > 0) {
+            const lastCode = rows[0].agent_code;
+            const numberPart = parseInt(lastCode.replace(prefix, ""));
+            nextNumber = numberPart + 1;
+          }
 
-    } else {
-      generateAndInsert();
-    }
+          const newCode = prefix + String(nextNumber).padStart(6, "0");
+
+          insertUser(newCode);
+        });
+
+      } else {
+        insertUser();
+      }
+
+    });
+
   });
 });
 
+module.exports = router;
+
 // ================= LOGIN =================
 router.post("/login", (req, res) => {
-  const { email, role } = req.body;
+  const { email, password, role } = req.body;
 
   db.query(
-    "SELECT * FROM users WHERE email = ?",
+    "SELECT * FROM users WHERE email = ? LIMIT 1",
     [email],
-    (err, results) => {
-      if (err || results.length === 0) {
+    async (err, results) => {
+
+      if (err) return res.status(500).json({ message: "Database error" });
+
+      if (!results.length) {
         return res.status(400).json({ message: "Invalid credentials" });
       }
 
@@ -141,30 +172,43 @@ router.post("/login", (req, res) => {
 
       if (user.role !== role) {
         return res.status(403).json({
-          message: `Registered as ${user.role}. Please login as ${user.role}.`,
+          message: `Registered as ${user.role}. Please login as ${user.role}.`
         });
       }
 
       if (user.status !== "approved") {
         return res.status(403).json({
-          message: "Account pending admin approval",
+          message: "Account pending admin approval"
         });
       }
 
+      // FIRST LOGIN → use admin_password
       if (user.admin_password && user.admin_password.trim() !== "") {
-  return res.status(200).json({
-    firstLogin: true,
-    message: "Please change your password"
-  });
-}
+
+        if (password !== user.admin_password) {
+          return res.status(400).json({ message: "Invalid credentials" });
+        }
+
+        return res.json({
+          firstLogin: true,
+          message: "Please change your password"
+        });
+      }
+
+      // NORMAL LOGIN → use hashed password
+      const isMatch = await bcrypt.compare(password, user.password);
+
+      if (!isMatch) {
+        return res.status(400).json({ message: "Invalid credentials" });
+      }
 
       res.json({
         message: "Login successful",
         user: {
           id: user.id,
           role: user.role,
-          company_name: user.company_name,
-        },
+          company_name: user.company_name
+        }
       });
     }
   );
