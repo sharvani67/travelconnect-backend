@@ -608,7 +608,7 @@ router.get("/properties", async (req, res) => {
         p.created_at,
         u.company_name AS supplier_name
       FROM properties p
-      JOIN users u ON p.supplier_id = u.id
+LEFT JOIN users u ON p.supplier_id = u.id
       ${where}
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
