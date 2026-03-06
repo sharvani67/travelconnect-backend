@@ -180,7 +180,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                                 Number(plan[rateType]) || 0,
                                 Number(plan.extraAdult) || 0,
                                 Number(plan.childWithBed) || 0,
-                                Number(plan.childWithoutBed) || 0
+                                Number(plan.childWithoutBed) || 0,
+                                plan.longWeekendFrom || null,
+                                plan.longWeekendTo || null
                             ]);
 
                         });
@@ -190,10 +192,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 if (rateValues.length) {
                     await connection.query(
                         `INSERT INTO property_room_rates
-             (room_id, plan, rate_type, base_price,
-              extra_adult_price, child_with_bed_price,
-              child_without_bed_price)
-             VALUES ?`,
+(room_id, plan, rate_type, base_price,
+extra_adult_price, child_with_bed_price,
+child_without_bed_price,
+long_weekend_from,
+long_weekend_to)
+VALUES ?`,
                         [rateValues]
                     );
                 }
@@ -209,7 +213,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         child_policy,
         pet_policy,
         terms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)`,
             [
                 propertyId,
                 parsedPolicies.booking_policy || "",
@@ -244,15 +248,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
             await connection.query(
                 `INSERT INTO property_staff
-         (property_id, name, designation, phones,
-           email, photo)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+(property_id,name,designation,phones,emails,photo)
+VALUES (?,?,?,?,?,?)`,
                 [
                     propertyId,
                     parsedStaff[i].name || "",
                     parsedStaff[i].designation || "",
                     JSON.stringify(parsedStaff[i].phones || []),
-                    parsedStaff[i].email || "",
+                    JSON.stringify(parsedStaff[i].emails || []),
                     photoFile
                 ]
             );
@@ -318,9 +321,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 parsedCheckin.check_out_time || "",
                 parsedCheckin.is_24hr_checkin ? 1 : 0,
                 parsedCheckin.early_checkin_allowed ? 1 : 0,
-                parsedCheckin.early_checkin_charge || 0,
+                parsedCheckin.early_checkin_charge || "",
                 parsedCheckin.late_checkout_allowed ? 1 : 0,
-                parsedCheckin.late_checkout_charge || 0,
+                parsedCheckin.late_checkout_charge || "",
                 parsedCheckin.id_proof_required ? 1 : 0,
             ]
         );
@@ -702,5 +705,22 @@ router.put("/staff/:id/delete", async (req, res) => {
     );
 
     res.json({ success: true });
+});
+
+router.put("/staff/:id/toggle", async (req, res) => {
+
+    const { field, value } = req.body;
+
+    if (!["show_phones", "show_emails", "show_photo"].includes(field)) {
+        return res.status(400).json({ message: "Invalid field" });
+    }
+
+    await db.promise().query(
+        `UPDATE property_staff SET ${field}=? WHERE id=?`,
+        [value ? 1 : 0, req.params.id]
+    );
+
+    res.json({ success: true });
+
 });
 module.exports = router;
