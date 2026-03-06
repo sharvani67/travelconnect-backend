@@ -182,6 +182,12 @@ router.post("/login", (req, res) => {
         });
       }
 
+      if (user.is_active === 0) {
+        return res.status(403).json({
+          message: "Your account has been deactivated by B2B Partners"
+        });
+      }
+
       // FIRST LOGIN → use admin_password
       if (user.admin_password && user.admin_password.trim() !== "") {
 

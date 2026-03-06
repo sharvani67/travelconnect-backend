@@ -168,9 +168,12 @@ router.post("/create-user", async (req, res) => {
         contact_person,
         email,
         mobile,
-        country,
+        address_line1,
+        address_line2,
         city,
+        state,
         pincode,
+        country,
         gst_applicable,
         gst_number,
         agent_type
@@ -193,15 +196,16 @@ router.post("/create-user", async (req, res) => {
 
     const generateAndInsert = (agentCode = null) => {
         const sql = `
-      INSERT INTO users
-      (role, agent_type, agent_code, supplier_type,
-       company_name, contact_person, email,
-       mobile, country, city, pincode,
-       gst_applicable, gst_number,
-       password, admin_password,
-       status, registration_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
-    `;
+INSERT INTO users
+(role, agent_type, agent_code, supplier_type,
+ company_name, contact_person, email,
+ mobile,
+ address_line1, address_line2, city, state, pincode, country,
+ gst_applicable, gst_number,
+ password, admin_password,
+ status, registration_type)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
+`;
 
         db.query(
             sql,
@@ -214,9 +218,12 @@ router.post("/create-user", async (req, res) => {
                 contact_person,
                 email,
                 mobile,
-                country,
+                address_line1,
+                address_line2,
                 city,
+                state,
                 pincode,
+                country,
                 gst_applicable,
                 gst_number,
                 hashed,
@@ -307,49 +314,49 @@ const crypto = require("crypto");
 // ================= SEND RESET OTP =================
 // ================= SEND RESET OTP =================
 router.post("/send-reset-otp", (req, res) => {
-  const { email } = req.body;
+    const { email } = req.body;
 
-  if (!email)
-    return res.status(400).json({ message: "Email required" });
+    if (!email)
+        return res.status(400).json({ message: "Email required" });
 
-  db.query(
-    "SELECT id, company_name, status FROM users WHERE email=?",
-    [email],
-    async (err, rows) => {
+    db.query(
+        "SELECT id, company_name, status FROM users WHERE email=?",
+        [email],
+        async (err, rows) => {
 
-      if (err)
-        return res.status(500).json({ message: "Database error" });
+            if (err)
+                return res.status(500).json({ message: "Database error" });
 
-      if (!rows.length)
-        return res.status(404).json({ message: "User not found" });
+            if (!rows.length)
+                return res.status(404).json({ message: "User not found" });
 
-      const user = rows[0];
+            const user = rows[0];
 
-      // 🔥 NEW CONDITION ADDED
-      if (user.status !== "approved") {
-        return res.status(403).json({
-          message: "Your account is not approved yet. Please contact admin."
-        });
-      }
+            // 🔥 NEW CONDITION ADDED
+            if (user.status !== "approved") {
+                return res.status(403).json({
+                    message: "Your account is not approved yet. Please contact admin."
+                });
+            }
 
-      // 🔐 Generate 6 digit OTP
-      const otp = crypto.randomInt(100000, 999999).toString();
-      const expiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+            // 🔐 Generate 6 digit OTP
+            const otp = crypto.randomInt(100000, 999999).toString();
+            const expiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-      db.query(
-        "UPDATE users SET reset_otp=?, reset_otp_expiry=? WHERE email=?",
-        [otp, expiry, email],
-        async (err) => {
+            db.query(
+                "UPDATE users SET reset_otp=?, reset_otp_expiry=? WHERE email=?",
+                [otp, expiry, email],
+                async (err) => {
 
-          if (err)
-            return res.status(500).json({ message: "Database error" });
+                    if (err)
+                        return res.status(500).json({ message: "Database error" });
 
-          try {
-            await transporter.sendMail({
-              from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
-              to: email,
-              subject: "Password Reset OTP 🔐",
-              html: `
+                    try {
+                        await transporter.sendMail({
+                            from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+                            to: email,
+                            subject: "Password Reset OTP 🔐",
+                            html: `
                 <div style="font-family: Arial; padding:20px;">
                   <h2>Hello ${user.company_name},</h2>
                   <p>Your password reset OTP is:</p>
@@ -363,73 +370,73 @@ router.post("/send-reset-otp", (req, res) => {
                   <p>Regards,<br/>B2B Partners Team</p>
                 </div>
               `,
-            });
+                        });
 
-            res.json({ message: "OTP sent to your email" });
+                        res.json({ message: "OTP sent to your email" });
 
-          } catch (error) {
-            console.error(error);
-            res.status(500).json({ message: "Failed to send OTP email" });
-          }
+                    } catch (error) {
+                        console.error(error);
+                        res.status(500).json({ message: "Failed to send OTP email" });
+                    }
+                }
+            );
         }
-      );
-    }
-  );
+    );
 });
 
 
 // ================= RESET PASSWORD =================
 router.post("/reset-password", async (req, res) => {
-  const { email, otp, newPassword } = req.body;
+    const { email, otp, newPassword } = req.body;
 
-  if (!email || !otp || !newPassword)
-    return res.status(400).json({ message: "All fields required" });
+    if (!email || !otp || !newPassword)
+        return res.status(400).json({ message: "All fields required" });
 
-  db.query(
-    "SELECT id, role, reset_otp, reset_otp_expiry FROM users WHERE email=?",
-    [email],
-    async (err, rows) => {
-      if (err) return res.status(500).json({ message: "Database error" });
-      if (!rows.length)
-        return res.status(404).json({ message: "User not found" });
+    db.query(
+        "SELECT id, role, reset_otp, reset_otp_expiry FROM users WHERE email=?",
+        [email],
+        async (err, rows) => {
+            if (err) return res.status(500).json({ message: "Database error" });
+            if (!rows.length)
+                return res.status(404).json({ message: "User not found" });
 
-      const user = rows[0];
+            const user = rows[0];
 
-      // ❌ Invalid OTP
-      if (user.reset_otp !== otp)
-        return res.status(400).json({ message: "Invalid OTP" });
+            // ❌ Invalid OTP
+            if (user.reset_otp !== otp)
+                return res.status(400).json({ message: "Invalid OTP" });
 
-      // ❌ Expired OTP
-      if (new Date(user.reset_otp_expiry) < new Date())
-        return res.status(400).json({ message: "OTP expired" });
+            // ❌ Expired OTP
+            if (new Date(user.reset_otp_expiry) < new Date())
+                return res.status(400).json({ message: "OTP expired" });
 
-      // 🔐 Hash new password
-      const hashed = await bcrypt.hash(newPassword, 10);
+            // 🔐 Hash new password
+            const hashed = await bcrypt.hash(newPassword, 10);
 
-      db.query(
-        `UPDATE users 
+            db.query(
+                `UPDATE users 
          SET password=?, 
              admin_password=NULL,
              reset_otp=NULL,
              reset_otp_expiry=NULL
          WHERE email=?`,
-        [hashed, email],
-        (err) => {
-          if (err)
-            return res.status(500).json({ message: "Database error" });
+                [hashed, email],
+                (err) => {
+                    if (err)
+                        return res.status(500).json({ message: "Database error" });
 
-          res.json({
-            message: "Password reset successful",
-            user: {
-              id: user.id,
-              role: user.role,
-              email: email
-            }
-          });
+                    res.json({
+                        message: "Password reset successful",
+                        user: {
+                            id: user.id,
+                            role: user.role,
+                            email: email
+                        }
+                    });
+                }
+            );
         }
-      );
-    }
-  );
+    );
 });
 
 
@@ -451,6 +458,22 @@ router.put("/update-status/:id", (req, res) => {
     );
 });
 
+
+router.put("/toggle-active/:id", async (req, res) => {
+    const { is_active } = req.body;
+
+    try {
+        await db.promise().query(
+            "UPDATE users SET is_active=? WHERE id=?",
+            [is_active, req.params.id]
+        );
+
+        res.json({ success: true });
+
+    } catch (err) {
+        res.status(500).json({ message: "Server error" });
+    }
+});
 
 // ================= DELETE USER =================
 router.delete("/delete/:id", (req, res) => {
@@ -918,5 +941,17 @@ router.put("/cancel/:bookingNumber", async (req, res) => {
     }
 });
 
+// ================= GET CATEGORIES =================
+router.get("/categories", (req, res) => {
+    const sql = "SELECT id, category_name FROM categories";
+
+    db.query(sql, (err, results) => {
+        if (err) {
+            return res.status(500).json({ message: "Database error" });
+        }
+
+        res.json(results);
+    });
+});
 
 module.exports = router;
