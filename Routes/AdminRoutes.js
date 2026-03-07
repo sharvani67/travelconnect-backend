@@ -159,8 +159,8 @@ router.post("/approve/:id", (req, res) => {
     );
 });
 
+router.post("/create-user", (req, res) => {
 
-router.post("/create-user", async (req, res) => {
     const {
         role,
         supplier_type,
@@ -176,9 +176,11 @@ router.post("/create-user", async (req, res) => {
         country,
         gst_applicable,
         gst_number,
-        agent_type
+        agent_type,
+        allow_duplicate
     } = req.body;
 
+    // ================= VALIDATION =================
     if (!role || !company_name || !contact_person || !email || !mobile) {
         return res.status(400).json({ message: "Missing required fields" });
     }
@@ -187,88 +189,123 @@ router.post("/create-user", async (req, res) => {
         return res.status(400).json({ message: "Agent type required" });
     }
 
-    // 🔐 Generate Password
-    const rawPassword =
-        email.split("@")[0].slice(0, 4).toUpperCase() +
-        mobile.slice(-4);
+    // ================= DUPLICATE COMPANY CHECK =================
+    const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
 
-    const hashed = await bcrypt.hash(rawPassword, 10);
+    db.query(checkNameSql, [company_name], (err, existing) => {
 
-    const generateAndInsert = (agentCode = null) => {
-        const sql = `
-INSERT INTO users
-(role, agent_type, agent_code, supplier_type,
- company_name, contact_person, email,
- mobile,
- address_line1, address_line2, city, state, pincode, country,
- gst_applicable, gst_number,
- password, admin_password,
- status, registration_type)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
-`;
+        if (err) {
+            console.error("Company check error:", err);
+            return res.status(500).json({ message: "Database error" });
+        }
 
-        db.query(
-            sql,
-            [
-                role,
-                agent_type || null,
-                agentCode,
-                supplier_type || null,
-                company_name,
-                contact_person,
-                email,
+        if (existing.length > 0 && !allow_duplicate) {
+            return res.status(409).json({
+                duplicate: true,
+                message: "Company name already exists. Do you want to continue?"
+            });
+        }
+
+        // ================= EMAIL DUPLICATE CHECK =================
+        const checkEmailSql = `SELECT id FROM users WHERE email = ?`;
+
+        db.query(checkEmailSql, [email], (err, emailRows) => {
+
+            if (err) {
+                console.error("Email check error:", err);
+                return res.status(500).json({ message: "Database error" });
+            }
+
+            if (emailRows.length > 0) {
+                return res.status(400).json({ message: "Email already registered" });
+            }
+
+            // ================= INSERT FUNCTION =================
+            const insertUser = (agentCode = null) => {
+
+                const sql = `
+                INSERT INTO users
+                (role, agent_type, agent_code, supplier_type,
+                company_name, contact_person, email,
                 mobile,
-                address_line1,
-                address_line2,
-                city,
-                state,
-                pincode,
-                country,
-                gst_applicable,
-                gst_number,
-                hashed,
-                rawPassword
-            ],
-            async (err) => {
-                if (err) return res.status(400).json({ message: "Database error" });
+                address_line1, address_line2, city, state, pincode, country,
+                gst_applicable, gst_number,
+                status, registration_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin')
+                `;
 
-                await sendMail(email, rawPassword, company_name, agentCode);
+                db.query(
+                    sql,
+                    [
+                        role,
+                        agent_type || null,
+                        agentCode || null,
+                        supplier_type || null,
+                        company_name,
+                        contact_person,
+                        email,
+                        mobile,
+                        address_line1 || null,
+                        address_line2 || null,
+                        city || null,
+                        state || null,
+                        pincode || null,
+                        country || null,
+                        gst_applicable || "no",
+                        gst_number || null
+                    ],
+                    (err) => {
 
-                res.json({ message: "User created & credentials sent" });
-            }
-        );
-    };
+                        if (err) {
+                            console.error("Insert error:", err);
+                            return res.status(500).json({ message: "Database error" });
+                        }
 
-    // 🔥 If Agent → Generate Code
-    if (role === "agent") {
-        const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
-
-        const codeSql = `
-      SELECT agent_code FROM users
-      WHERE agent_code LIKE ?
-      ORDER BY id DESC LIMIT 1
-    `;
-
-        db.query(codeSql, [`${prefix}%`], (err, rows) => {
-            if (err) return res.status(500).json({ message: "Database error" });
-
-            let nextNumber = 1;
-
-            if (rows.length > 0 && rows[0].agent_code) {
-                const numberPart = parseInt(
-                    rows[0].agent_code.replace(prefix, "")
+                        res.json({
+                            message: "User created successfully. Status is pending."
+                        });
+                    }
                 );
-                nextNumber = numberPart + 1;
+            };
+
+            // ================= AGENT CODE GENERATION =================
+            if (role === "agent") {
+
+                const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+
+                const codeSql = `
+                SELECT agent_code FROM users
+                WHERE agent_code LIKE ?
+                ORDER BY id DESC LIMIT 1
+                `;
+
+                db.query(codeSql, [`${prefix}%`], (err, rows) => {
+
+                    if (err) {
+                        console.error("Agent code error:", err);
+                        return res.status(500).json({ message: "Database error" });
+                    }
+
+                    let nextNumber = 1;
+
+                    if (rows.length > 0 && rows[0].agent_code) {
+                        const numberPart = parseInt(rows[0].agent_code.replace(prefix, ""));
+                        nextNumber = numberPart + 1;
+                    }
+
+                    const newCode = prefix + String(nextNumber).padStart(6, "0");
+
+                    insertUser(newCode);
+                });
+
+            } else {
+                insertUser();
             }
 
-            const newCode =
-                prefix + String(nextNumber).padStart(6, "0");
-
-            generateAndInsert(newCode);
         });
-    } else {
-        generateAndInsert();
-    }
+
+    });
+
 });
 
 async function sendMail(toEmail, password, companyName, agentCode) {
@@ -294,7 +331,7 @@ async function sendMail(toEmail, password, companyName, agentCode) {
         <p>Please login and change your password after first login.</p>
 
         <br/>
-        <a href="http://localhost:5173/login"
+        <a href="https://b2bpartners.in/login"
            style="background:#16a34a;color:white;padding:10px 20px;
            text-decoration:none;border-radius:5px;">
            Login Now
