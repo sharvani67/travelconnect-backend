@@ -113,50 +113,48 @@ router.get("/user/:id", (req, res) => {
 // ================= APPROVE + GENERATE ONCE =================
 
 
-router.post("/approve/:id", (req, res) => {
+router.post("/approve/:id", async (req, res) => {
 
-    db.query(
-        "SELECT admin_password, email, mobile, company_name FROM users WHERE id=?",
-        [req.params.id],
-        async (err, rows) => {
+    const { password } = req.body;
 
-            if (err) return res.status(500).json(err);
-            if (!rows.length) return res.status(404).json({});
+    if (!password) {
+        return res.status(400).json({ message: "Password required" });
+    }
 
-            const user = rows[0];
+    try {
 
-            // 🔒 If already generated → just resend email
-            if (user.admin_password && user.admin_password.trim() !== "") {
+        const hashed = await bcrypt.hash(password, 10);
 
-                await sendMail(user.email, user.admin_password, user.company_name);
-                return res.json({ password: user.admin_password });
-            }
+        const [rows] = await db.promise().query(
+            "SELECT email, company_name FROM users WHERE id=?",
+            [req.params.id]
+        );
 
-            // Generate Password
-            const rawPassword =
-                user.email.split("@")[0].slice(0, 4).toUpperCase() +
-                user.mobile.slice(-4);
-
-            const hashed = await bcrypt.hash(rawPassword, 10);
-
-            db.query(
-                `UPDATE users 
-                 SET status='approved',
-                     password=?,
-                     admin_password=?
-                 WHERE id=?`,
-                [hashed, rawPassword, req.params.id],
-                async (err) => {
-
-                    if (err) return res.status(500).json(err);
-
-                    await sendMail(user.email, rawPassword, user.company_name);
-
-                    res.json({ password: rawPassword });
-                }
-            );
+        if (!rows.length) {
+            return res.status(404).json({ message: "User not found" });
         }
-    );
+
+        const user = rows[0];
+
+        await db.promise().query(
+            `UPDATE users
+             SET password=?, admin_password=?, status='approved'
+             WHERE id=?`,
+            [hashed, password, req.params.id]
+        );
+
+        // SEND EMAIL ONLY HERE
+        await sendMail(user.email, password, user.company_name);
+
+        res.json({ success: true });
+
+    } catch (err) {
+
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+
+    }
+
 });
 
 
@@ -179,7 +177,7 @@ async function sendMail(toEmail, password, companyName) {
 
             <br/>
 
-            <a href="https://b2bpartners.in/login"
+            <a href="http://localhost:5173/login"
             style="background:#16a34a;color:white;padding:10px 20px;
             text-decoration:none;border-radius:5px;">
             Login Now
