@@ -1,0 +1,148 @@
+router.post("/create-user", (req, res) => {
+
+    const {
+        role,
+        supplier_type,
+        company_name,
+        contact_person,
+        email,
+        mobile,
+        address_line1,
+        address_line2,
+        city,
+        state,
+        pincode,
+        country,
+        gst_applicable,
+        gst_number,
+        agent_type,
+        allow_duplicate
+    } = req.body;
+
+    // ================= VALIDATION =================
+    if (!role || !company_name || !contact_person || !email || !mobile) {
+        return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    if (role === "agent" && !agent_type) {
+        return res.status(400).json({ message: "Agent type required" });
+    }
+
+    // ================= DUPLICATE COMPANY CHECK =================
+    const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
+
+    db.query(checkNameSql, [company_name], (err, existing) => {
+
+        if (err) {
+            console.error("Company check error:", err);
+            return res.status(500).json({ message: "Database error" });
+        }
+
+        if (existing.length > 0 && !allow_duplicate) {
+            return res.status(409).json({
+                duplicate: true,
+                message: "Company name already exists. Do you want to continue?"
+            });
+        }
+
+        // ================= EMAIL DUPLICATE CHECK =================
+        const checkEmailSql = `SELECT id FROM users WHERE email = ?`;
+
+        db.query(checkEmailSql, [email], (err, emailRows) => {
+
+            if (err) {
+                console.error("Email check error:", err);
+                return res.status(500).json({ message: "Database error" });
+            }
+
+            if (emailRows.length > 0) {
+                return res.status(400).json({ message: "Email already registered" });
+            }
+
+            // ================= INSERT FUNCTION =================
+            const insertUser = (agentCode = null) => {
+
+                const sql = `
+                INSERT INTO users
+                (role, agent_type, agent_code, supplier_type,
+                company_name, contact_person, email,
+                mobile,
+                address_line1, address_line2, city, state, pincode, country,
+                gst_applicable, gst_number,
+                status, registration_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin')
+                `;
+
+                db.query(
+                    sql,
+                    [
+                        role,
+                        agent_type || null,
+                        agentCode || null,
+                        supplier_type || null,
+                        company_name,
+                        contact_person,
+                        email,
+                        mobile,
+                        address_line1 || null,
+                        address_line2 || null,
+                        city || null,
+                        state || null,
+                        pincode || null,
+                        country || null,
+                        gst_applicable || "no",
+                        gst_number || null
+                    ],
+                    (err) => {
+
+                        if (err) {
+                            console.error("Insert error:", err);
+                            return res.status(500).json({ message: "Database error" });
+                        }
+
+                        res.json({
+                            message: "User created successfully. Status is pending."
+                        });
+                    }
+                );
+            };
+
+            // ================= AGENT CODE GENERATION =================
+            if (role === "agent") {
+
+                const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+
+                const codeSql = `
+                SELECT agent_code FROM users
+                WHERE agent_code LIKE ?
+                ORDER BY id DESC LIMIT 1
+                `;
+
+                db.query(codeSql, [`${prefix}%`], (err, rows) => {
+
+                    if (err) {
+                        console.error("Agent code error:", err);
+                        return res.status(500).json({ message: "Database error" });
+                    }
+
+                    let nextNumber = 1;
+
+                    if (rows.length > 0 && rows[0].agent_code) {
+                        const numberPart = parseInt(rows[0].agent_code.replace(prefix, ""));
+                        nextNumber = numberPart + 1;
+                    }
+
+                    const newCode = prefix + String(nextNumber).padStart(6, "0");
+
+                    insertUser(newCode);
+                });
+
+            } else {
+                insertUser();
+            }
+
+        });
+
+    });
+
+});

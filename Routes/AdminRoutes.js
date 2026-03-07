@@ -160,7 +160,43 @@ router.post("/approve/:id", (req, res) => {
 });
 
 
+async function sendMail(toEmail, password, companyName) {
+
+    const mailOptions = {
+        from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
+        to: toEmail,
+        subject: "Your Login Credentials",
+        html: `
+        <div style="font-family: Arial; padding:20px;">
+            <h2>Hello ${companyName}</h2>
+
+            <p>Your account has been approved.</p>
+
+            <h3>Login Credentials</h3>
+
+            <p><b>Email:</b> ${toEmail}</p>
+            <p><b>Password:</b> ${password}</p>
+
+            <br/>
+
+            <a href="https://b2bpartners.in/login"
+            style="background:#16a34a;color:white;padding:10px 20px;
+            text-decoration:none;border-radius:5px;">
+            Login Now
+            </a>
+
+            <br/><br/>
+            <p>Regards,<br/>B2B Partners Team</p>
+        </div>
+        `
+    };
+
+    await transporter.sendMail(mailOptions);
+}
+
+
 router.post("/create-user", async (req, res) => {
+
     const {
         role,
         supplier_type,
@@ -183,29 +219,18 @@ router.post("/create-user", async (req, res) => {
         return res.status(400).json({ message: "Missing required fields" });
     }
 
-    if (role === "agent" && !agent_type) {
-        return res.status(400).json({ message: "Agent type required" });
-    }
-
-    // 🔐 Generate Password
-    const rawPassword =
-        email.split("@")[0].slice(0, 4).toUpperCase() +
-        mobile.slice(-4);
-
-    const hashed = await bcrypt.hash(rawPassword, 10);
-
     const generateAndInsert = (agentCode = null) => {
+
         const sql = `
-INSERT INTO users
-(role, agent_type, agent_code, supplier_type,
- company_name, contact_person, email,
- mobile,
- address_line1, address_line2, city, state, pincode, country,
- gst_applicable, gst_number,
- password, admin_password,
- status, registration_type)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin')
-`;
+        INSERT INTO users
+        (role, agent_type, agent_code, supplier_type,
+        company_name, contact_person, email,
+        mobile,
+        address_line1, address_line2, city, state, pincode, country,
+        gst_applicable, gst_number,
+        status, registration_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin')
+        `;
 
         db.query(
             sql,
@@ -225,89 +250,54 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'admin
                 pincode,
                 country,
                 gst_applicable,
-                gst_number,
-                hashed,
-                rawPassword
+                gst_number
             ],
-            async (err) => {
-                if (err) return res.status(400).json({ message: "Database error" });
+            (err) => {
 
-                await sendMail(email, rawPassword, company_name, agentCode);
+                if (err) {
+                    return res.status(400).json({ message: "Database error" });
+                }
 
-                res.json({ message: "User created & credentials sent" });
+                res.json({ message: "User created successfully" });
+
             }
         );
     };
 
-    // 🔥 If Agent → Generate Code
     if (role === "agent") {
+
         const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-        const codeSql = `
-      SELECT agent_code FROM users
-      WHERE agent_code LIKE ?
-      ORDER BY id DESC LIMIT 1
-    `;
+        db.query(
+            `SELECT agent_code FROM users WHERE agent_code LIKE ? ORDER BY id DESC LIMIT 1`,
+            [`${prefix}%`],
+            (err, rows) => {
 
-        db.query(codeSql, [`${prefix}%`], (err, rows) => {
-            if (err) return res.status(500).json({ message: "Database error" });
+                let nextNumber = 1;
 
-            let nextNumber = 1;
+                if (rows.length > 0 && rows[0].agent_code) {
+                    const numberPart = parseInt(
+                        rows[0].agent_code.replace(prefix, "")
+                    );
+                    nextNumber = numberPart + 1;
+                }
 
-            if (rows.length > 0 && rows[0].agent_code) {
-                const numberPart = parseInt(
-                    rows[0].agent_code.replace(prefix, "")
-                );
-                nextNumber = numberPart + 1;
+                const newCode =
+                    prefix + String(nextNumber).padStart(6, "0");
+
+                generateAndInsert(newCode);
             }
+        );
 
-            const newCode =
-                prefix + String(nextNumber).padStart(6, "0");
-
-            generateAndInsert(newCode);
-        });
     } else {
+
         generateAndInsert();
+
     }
+
 });
 
-async function sendMail(toEmail, password, companyName, agentCode) {
 
-    const mailOptions = {
-        from: `"B2B Partners" <${process.env.SMTP_EMAIL}>`,
-        to: toEmail,
-        subject: "Your Account Has Been Created 🎉",
-        html: `
-      <div style="font-family: Arial; padding:20px;">
-        <h2>Hello ${companyName},</h2>
-        <p>Your account has been <b>created by admin</b>.</p>
-
-        <h3>Login Credentials:</h3>
-        <p><b>Email:</b> ${toEmail}</p>
-        <p><b>Password:</b> ${password}</p>
-
-        ${agentCode
-                ? `<p><b>Agent Code:</b> ${agentCode}</p>`
-                : ""
-            }
-
-        <p>Please login and change your password after first login.</p>
-
-        <br/>
-        <a href="http://localhost:5173/login"
-           style="background:#16a34a;color:white;padding:10px 20px;
-           text-decoration:none;border-radius:5px;">
-           Login Now
-        </a>
-
-        <br/><br/>
-        <p>Regards,<br/>B2B Partners Team</p>
-      </div>
-    `
-    };
-
-    await transporter.sendMail(mailOptions);
-}
 
 const crypto = require("crypto");
 
