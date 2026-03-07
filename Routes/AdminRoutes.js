@@ -113,48 +113,50 @@ router.get("/user/:id", (req, res) => {
 // ================= APPROVE + GENERATE ONCE =================
 
 
-router.post("/approve/:id", async (req, res) => {
+router.post("/approve/:id", (req, res) => {
 
-    const { password } = req.body;
+    db.query(
+        "SELECT admin_password, email, mobile, company_name FROM users WHERE id=?",
+        [req.params.id],
+        async (err, rows) => {
 
-    if (!password) {
-        return res.status(400).json({ message: "Password required" });
-    }
+            if (err) return res.status(500).json(err);
+            if (!rows.length) return res.status(404).json({});
 
-    try {
+            const user = rows[0];
 
-        const hashed = await bcrypt.hash(password, 10);
+            // 🔒 If already generated → just resend email
+            if (user.admin_password && user.admin_password.trim() !== "") {
 
-        const [rows] = await db.promise().query(
-            "SELECT email, company_name FROM users WHERE id=?",
-            [req.params.id]
-        );
+                await sendMail(user.email, user.admin_password, user.company_name);
+                return res.json({ password: user.admin_password });
+            }
 
-        if (!rows.length) {
-            return res.status(404).json({ message: "User not found" });
+            // Generate Password
+            const rawPassword =
+                user.email.split("@")[0].slice(0, 4).toUpperCase() +
+                user.mobile.slice(-4);
+
+            const hashed = await bcrypt.hash(rawPassword, 10);
+
+            db.query(
+                `UPDATE users 
+                 SET status='approved',
+                     password=?,
+                     admin_password=?
+                 WHERE id=?`,
+                [hashed, rawPassword, req.params.id],
+                async (err) => {
+
+                    if (err) return res.status(500).json(err);
+
+                    await sendMail(user.email, rawPassword, user.company_name);
+
+                    res.json({ password: rawPassword });
+                }
+            );
         }
-
-        const user = rows[0];
-
-        await db.promise().query(
-            `UPDATE users
-             SET password=?, admin_password=?, status='approved'
-             WHERE id=?`,
-            [hashed, password, req.params.id]
-        );
-
-        // SEND EMAIL ONLY HERE
-        await sendMail(user.email, password, user.company_name);
-
-        res.json({ success: true });
-
-    } catch (err) {
-
-        console.error(err);
-        res.status(500).json({ message: "Server error" });
-
-    }
-
+    );
 });
 
 
@@ -177,7 +179,7 @@ async function sendMail(toEmail, password, companyName) {
 
             <br/>
 
-            <a href="http://localhost:5173/login"
+            <a href="http://b2bpartners.in/login"
             style="background:#16a34a;color:white;padding:10px 20px;
             text-decoration:none;border-radius:5px;">
             Login Now
