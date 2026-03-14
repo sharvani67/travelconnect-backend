@@ -26,6 +26,108 @@ const uploadFields = upload.fields([
     { name: "certificate", maxCount: 1 },
 ]);
 
+
+router.post("/save-draft", uploadFields, async (req, res) => {
+
+    const {
+        property_id,
+        supplier_id,
+        form,
+        rooms,
+        staff,
+        amenities,
+        sightseeing,
+        faqs,
+        policies,
+        cancellation_rules,
+        checkin_data,
+        bank_details
+    } = req.body;
+
+    if (!supplier_id) {
+        return res.status(400).json({ message: "Supplier missing" });
+    }
+
+    try {
+
+        const draftData = JSON.stringify({
+            form,
+            rooms,
+            staff,
+            amenities,
+            sightseeing,
+            faqs,
+            policies,
+            cancellation_rules,
+            checkin_data,
+            bank_details
+        });
+
+        if (property_id) {
+
+            await db.promise().query(
+                `UPDATE properties
+                 SET draft_data=?, status='draft'
+                 WHERE id=?`,
+                [draftData, property_id]
+            );
+
+            return res.json({
+                message: "Draft updated",
+                propertyId: property_id
+            });
+
+        } else {
+
+            const [result] = await db.promise().query(
+                `INSERT INTO properties
+                 (supplier_id,status,draft_data)
+                 VALUES (?,?,?)`,
+                [supplier_id, "draft", draftData]
+            );
+
+            return res.json({
+                message: "Draft saved",
+                propertyId: result.insertId
+            });
+
+        }
+
+    } catch (err) {
+
+        console.error(err);
+        res.status(500).json({ message: "Draft save failed" });
+
+    }
+
+});
+
+router.get("/get-draft/:supplierId", async (req, res) => {
+
+    const { supplierId } = req.params;
+
+    const [rows] = await db.promise().query(
+        `SELECT id,draft_data
+ FROM properties
+ WHERE supplier_id=?
+ ORDER BY id DESC
+ LIMIT 1`,
+        [supplierId]
+    );
+
+    if (!rows.length) {
+        return res.json(null);
+    }
+
+    const draft = JSON.parse(rows[0].draft_data || "{}");
+
+    res.json({
+        id: rows[0].id,
+        ...draft
+    });
+
+});
+
 // ================== ADD PROPERTY FULL ==================
 router.post("/add-property", uploadFields, async (req, res) => {
 
@@ -37,8 +139,8 @@ router.post("/add-property", uploadFields, async (req, res) => {
         pincode,
         address,
         landmark,
-        contact,
-        email,
+        contacts,
+        emails,
         total_rooms,
         hotel_remarks,
         rooms,
@@ -68,7 +170,8 @@ router.post("/add-property", uploadFields, async (req, res) => {
     let parsedRules = [];
     let parsedCheckin = {};
     let parsedBank = {};
-
+    const parsedContacts = contacts ? JSON.parse(contacts) : [];
+    const parsedEmails = emails ? JSON.parse(emails) : [];
     try {
         parsedRooms = rooms ? JSON.parse(rooms) : [];
         parsedPolicies = policies ? JSON.parse(policies) : {};
@@ -103,8 +206,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 pincode || "",
                 address || "",
                 landmark || "",
-                contact || "",
-                email || "",
+                JSON.stringify(parsedContacts),
+                JSON.stringify(parsedEmails),
                 supplier_id,
                 Number(total_rooms) || 0,
                 hotel_remarks || "", // ADD THIS
@@ -370,35 +473,36 @@ VALUES (?,?,?,?,?,?)`,
 
 router.get("/", (req, res) => {
     const sql = `
-    SELECT 
-      p.id,
-      p.name,
-      p.category,
-      p.city,
-      p.area,
-      p.pincode,
-      img.image_path AS cover_image,
-      MIN(rr.base_price) AS starting_price
-    FROM properties p
+   SELECT 
+  p.id,
+  p.name,
+  p.category,
+  p.city,
+  p.area,
+  p.pincode,
+  p.supplier_id,
+  img.image_path AS cover_image,
+  MIN(rr.base_price) AS starting_price
+FROM properties p
 
-    LEFT JOIN property_images img
-      ON p.id = img.property_id AND img.is_cover = 1
+LEFT JOIN property_images img
+  ON p.id = img.property_id AND img.is_cover = 1
 
-    LEFT JOIN property_rooms pr
-      ON p.id = pr.property_id
+LEFT JOIN property_rooms pr
+  ON p.id = pr.property_id
 
-    LEFT JOIN property_room_rates rr
-      ON pr.id = rr.room_id
-      AND rr.rate_type = 'weekday'
-      AND rr.plan = 'EP'
+LEFT JOIN property_room_rates rr
+  ON pr.id = rr.room_id
+  AND rr.rate_type = 'weekday'
+  AND rr.plan = 'EP'
 
-    WHERE p.status = 'Approved'   -- ✅ IMPORTANT
+WHERE p.status = 'Approved'
 
-    GROUP BY 
-      p.id, p.name, p.category, p.city, 
-      p.area, p.pincode, img.image_path
+GROUP BY 
+  p.id, p.name, p.category, p.city, 
+  p.area, p.pincode, p.supplier_id, img.image_path
 
-    ORDER BY p.id DESC
+ORDER BY p.id DESC
   `;
 
     db.query(sql, (err, results) => {

@@ -4,14 +4,16 @@ const db = require("../Config/db");
 const bcrypt = require("bcryptjs");
 
 
+
 // ================= REGISTER =================
 router.post("/register", (req, res) => {
+
   const {
     role,
     company_name,
     contact_person,
     email,
-    mobile,
+    mobiles, // <-- multiple mobiles
     city,
     pincode,
     country,
@@ -22,8 +24,16 @@ router.post("/register", (req, res) => {
     allow_duplicate
   } = req.body;
 
+
   // ================= VALIDATION =================
-  if (!role || !company_name || !contact_person || !email || !mobile) {
+  if (
+    !role ||
+    !company_name ||
+    !contact_person ||
+    !email ||
+    !Array.isArray(mobiles) ||
+    mobiles.filter(m => m.trim() !== "").length === 0
+  ) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
@@ -38,6 +48,7 @@ router.post("/register", (req, res) => {
   if (role === "agent" && !agent_type) {
     return res.status(400).json({ message: "Agent type required" });
   }
+
 
   // ================= DUPLICATE COMPANY CHECK =================
   const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
@@ -56,10 +67,11 @@ router.post("/register", (req, res) => {
       });
     }
 
-    // ================= EMAIL DUPLICATE CHECK =================
-    const checkEmailSql = `SELECT id FROM users WHERE email = ?`;
 
-    db.query(checkEmailSql, [email], (err, emailRows) => {
+    // ================= EMAIL DUPLICATE CHECK =================
+    const checkEmailSql = `SELECT id FROM users WHERE email = ? AND company_name = ?`;
+
+    db.query(checkEmailSql, [email, company_name], (err, emailRows) => {
 
       if (err) {
         console.error("Email check error:", err);
@@ -67,94 +79,143 @@ router.post("/register", (req, res) => {
       }
 
       if (emailRows.length > 0) {
-        return res.status(400).json({ message: "Email already registered" });
+        return res.status(400).json({
+          message: "Email already registered for this supplier"
+        });
       }
 
-      // ================= INSERT FUNCTION =================
-      const insertUser = (agentCode = null) => {
 
-        const sql = `
-          INSERT INTO users
-          (role, agent_type, agent_code, supplier_type, company_name,
-           contact_person, email, mobile, country, city, pincode,
-           gst_applicable, gst_number, status, registration_type)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
-        `;
+      // ================= MOBILE CHECK =================
+      const checkMobileSql = `
+        SELECT company_name, mobile 
+        FROM users 
+        WHERE mobile IS NOT NULL
+      `;
 
-        const values = [
-          role,
-          agent_type || null,
-          agentCode || null,
-          supplier_type || null,
-          company_name,
-          contact_person,
-          email,
-          mobile,
-          country || null,
-          city || null,
-          pincode || null,
-          gst_applicable || "no",
-          gst_number || null
-        ];
+      db.query(checkMobileSql, (err, rows) => {
 
-        db.query(sql, values, (err) => {
+        if (err) {
+          console.error("Mobile check error:", err);
+          return res.status(500).json({ message: "Database error" });
+        }
 
-          if (err) {
-            console.error("Insert user error:", err);
-            return res.status(500).json({ message: "Database error" });
+        for (let user of rows) {
+
+          const existingMobiles = user.mobile
+            ? user.mobile.split(",").map(m => m.trim())
+            : [];
+
+          for (let newMobile of mobiles) {
+
+            if (existingMobiles.includes(newMobile)) {
+
+              if (user.company_name === company_name) {
+                return res.status(400).json({
+                  message: "Mobile number already exists for this supplier"
+                });
+              }
+
+            }
+
           }
 
-          return res.json({
-            message: "Registration submitted for admin approval"
+        }
+
+
+        // ================= INSERT FUNCTION =================
+        const insertUser = (agentCode = null) => {
+
+          const sql = `
+            INSERT INTO users
+            (role, agent_type, agent_code, supplier_type, company_name,
+             contact_person, email, mobile, country, city, pincode,
+             gst_applicable, gst_number, status, registration_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
+          `;
+
+          const values = [
+            role,
+            agent_type || null,
+            agentCode || null,
+            supplier_type || null,
+            company_name,
+            contact_person,
+            email,
+            mobiles.join(","),
+            country || null,
+            city || null,
+            pincode || null,
+            gst_applicable || "no",
+            gst_number || null
+          ];
+
+          db.query(sql, values, (err) => {
+
+            if (err) {
+              console.error("Insert user error:", err);
+              return res.status(500).json({ message: "Database error" });
+            }
+
+            return res.json({
+              message: "Registration submitted for admin approval"
+            });
+
           });
-        });
-      };
 
-      // ================= AGENT CODE GENERATION =================
-      if (role === "agent") {
+        };
 
-        const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-        const codeSql = `
-          SELECT agent_code FROM users
-          WHERE agent_code LIKE ?
-          ORDER BY id DESC
-          LIMIT 1
-        `;
+        // ================= AGENT CODE GENERATION =================
+        if (role === "agent") {
 
-        db.query(codeSql, [`${prefix}%`], (err, rows) => {
+          const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-          if (err) {
-            console.error("Agent code error:", err);
-            return res.status(500).json({ message: "Database error" });
-          }
+          const codeSql = `
+            SELECT agent_code FROM users
+            WHERE agent_code LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+          `;
 
-          let nextNumber = 1;
+          db.query(codeSql, [`${prefix}%`], (err, rows) => {
 
-          if (rows.length > 0) {
-            const lastCode = rows[0].agent_code;
-            const numberPart = parseInt(lastCode.replace(prefix, ""));
-            nextNumber = numberPart + 1;
-          }
+            if (err) {
+              console.error("Agent code error:", err);
+              return res.status(500).json({ message: "Database error" });
+            }
 
-          const newCode = prefix + String(nextNumber).padStart(6, "0");
+            let nextNumber = 1;
 
-          insertUser(newCode);
-        });
+            if (rows.length > 0) {
+              const lastCode = rows[0].agent_code;
+              const numberPart = parseInt(lastCode.replace(prefix, ""));
+              nextNumber = numberPart + 1;
+            }
 
-      } else {
-        insertUser();
-      }
+            const newCode = prefix + String(nextNumber).padStart(6, "0");
+
+            insertUser(newCode);
+
+          });
+
+        } else {
+
+          insertUser();
+
+        }
+
+      });
 
     });
 
   });
+
 });
 
-module.exports = router;
 
 // ================= LOGIN =================
 router.post("/login", (req, res) => {
+
   const { email, password, role } = req.body;
 
   db.query(
@@ -182,13 +243,13 @@ router.post("/login", (req, res) => {
         });
       }
 
-      if (user.is_active === 0) {
-        return res.status(403).json({
-          message: "Your account has been deactivated by B2B Partners"
-        });
-      }
+      // if (user.is_active === 0) {
+      //   return res.status(403).json({
+      //     message: "Your account has been deactivated by B2B Partners"
+      //   });
+      // }
 
-      // FIRST LOGIN → use admin_password
+      // FIRST LOGIN
       if (user.admin_password && user.admin_password.trim() !== "") {
 
         if (password !== user.admin_password) {
@@ -199,9 +260,10 @@ router.post("/login", (req, res) => {
           firstLogin: true,
           message: "Please change your password"
         });
+
       }
 
-      // NORMAL LOGIN → use hashed password
+      // NORMAL LOGIN
       const isMatch = await bcrypt.compare(password, user.password);
 
       if (!isMatch) {
@@ -213,12 +275,17 @@ router.post("/login", (req, res) => {
         user: {
           id: user.id,
           role: user.role,
-          company_name: user.company_name
+          company_name: user.company_name,
+          is_active: user.is_active
         }
       });
+
     }
   );
+
 });
+
+
 
 
 router.post("/admin-login", (req, res) => {

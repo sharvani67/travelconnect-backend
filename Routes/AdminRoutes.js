@@ -4,6 +4,28 @@ const db = require("../Config/db");
 const bcrypt = require("bcryptjs");
 const transporter = require("../utils/mailer");
 
+router.get("/supplier/:id", async (req, res) => {
+
+    const supplierId = req.params.id;
+
+    try {
+
+        const [rows] = await db.promise().query(
+            "SELECT company_name FROM users WHERE id=?",
+            [supplierId]
+        );
+
+        if (!rows.length) {
+            return res.status(404).json({ message: "Supplier not found" });
+        }
+
+        res.json(rows[0]);
+
+    } catch (err) {
+        res.status(500).json({ message: "Server error" });
+    }
+
+});
 
 // ================= ADMIN DASHBOARD ADVANCED STATS =================
 router.get("/dashboard-stats", async (req, res) => {
@@ -195,7 +217,8 @@ async function sendMail(toEmail, password, companyName) {
 }
 
 
-router.post("/create-user", async (req, res) => {
+// ================= ADMIN CREATE USER =================
+router.post("/create-user", (req, res) => {
 
     const {
         role,
@@ -203,9 +226,11 @@ router.post("/create-user", async (req, res) => {
         company_name,
         contact_person,
         email,
-        mobile,
+        mobiles,
         address_line1,
         address_line2,
+        area,
+        landmark,
         city,
         state,
         pincode,
@@ -215,85 +240,183 @@ router.post("/create-user", async (req, res) => {
         agent_type
     } = req.body;
 
-    if (!role || !company_name || !contact_person || !email || !mobile) {
+
+    // ================= VALIDATION =================
+    if (
+        !role ||
+        !company_name ||
+        !contact_person ||
+        !email ||
+        !Array.isArray(mobiles) ||
+        mobiles.filter(m => m.trim() !== "").length === 0
+    ) {
         return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const generateAndInsert = (agentCode = null) => {
+    if (gst_applicable === "yes" && !gst_number) {
+        return res.status(400).json({ message: "GST number required" });
+    }
 
-        const sql = `
+    if (role === "supplier" && !supplier_type) {
+        return res.status(400).json({ message: "Supplier type required" });
+    }
+
+    if (role === "agent" && !agent_type) {
+        return res.status(400).json({ message: "Agent type required" });
+    }
+
+
+    // ================= EMAIL DUPLICATE CHECK =================
+    const checkEmailSql = `
+  SELECT id FROM users 
+  WHERE email = ? AND company_name = ?
+  `;
+
+    db.query(checkEmailSql, [email, company_name], (err, emailRows) => {
+
+        if (err) {
+            console.error("Email check error:", err);
+            return res.status(500).json({ message: "Database error" });
+        }
+
+        if (emailRows.length > 0) {
+            return res.status(400).json({
+                message: "Email already exists for this User"
+            });
+        }
+
+
+        // ================= MOBILE CHECK =================
+        const checkMobileSql = `
+      SELECT company_name, mobile
+      FROM users
+      WHERE mobile IS NOT NULL
+    `;
+
+        db.query(checkMobileSql, (err, rows) => {
+
+            if (err) {
+                console.error("Mobile check error:", err);
+                return res.status(500).json({ message: "Database error" });
+            }
+
+            for (let user of rows) {
+
+                const existingMobiles = user.mobile
+                    ? user.mobile.split(",").map(m => m.trim())
+                    : [];
+
+                for (let newMobile of mobiles) {
+
+                    if (existingMobiles.includes(newMobile)) {
+
+                        if (user.company_name === company_name) {
+                            return res.status(400).json({
+                                message: "Mobile number already exists for this User"
+                            });
+                        }
+
+                    }
+
+                }
+
+            }
+
+
+            // ================= INSERT FUNCTION =================
+            const insertUser = (agentCode = null) => {
+
+                const sql = `
         INSERT INTO users
         (role, agent_type, agent_code, supplier_type,
         company_name, contact_person, email,
         mobile,
-        address_line1, address_line2, city, state, pincode, country,
+        address_line1, address_line2, area, landmark, city, state, pincode, country,
         gst_applicable, gst_number,
-        status, registration_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin')
+        status, registration_type, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin', 0)
         `;
 
-        db.query(
-            sql,
-            [
-                role,
-                agent_type || null,
-                agentCode,
-                supplier_type || null,
-                company_name,
-                contact_person,
-                email,
-                mobile,
-                address_line1,
-                address_line2,
-                city,
-                state,
-                pincode,
-                country,
-                gst_applicable,
-                gst_number
-            ],
-            (err) => {
+                const values = [
+                    role,
+                    agent_type || null,
+                    agentCode || null,
+                    supplier_type || null,
+                    company_name,
+                    contact_person,
+                    email,
+                    mobiles.join(","), // store multiple mobiles
+                    address_line1 || null,
+                    address_line2 || null,
+                    area || null,
+                    landmark || null,
+                    city || null,
+                    state || null,
+                    pincode || null,
+                    country || null,
+                    gst_applicable || "no",
+                    gst_number || null
+                ];
 
-                if (err) {
-                    return res.status(400).json({ message: "Database error" });
-                }
+                db.query(sql, values, (err) => {
 
-                res.json({ message: "User created successfully" });
+                    if (err) {
+                        console.error("Insert user error:", err);
+                        return res.status(500).json({ message: "Database error" });
+                    }
+
+                    res.json({
+                        message: "User created successfully"
+                    });
+
+                });
+
+            };
+
+
+            // ================= AGENT CODE GENERATION =================
+            if (role === "agent") {
+
+                const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+
+                const codeSql = `
+        SELECT agent_code
+        FROM users
+        WHERE agent_code LIKE ?
+        ORDER BY id DESC
+        LIMIT 1
+        `;
+
+                db.query(codeSql, [`${prefix}%`], (err, rows) => {
+
+                    if (err) {
+                        console.error("Agent code error:", err);
+                        return res.status(500).json({ message: "Database error" });
+                    }
+
+                    let nextNumber = 1;
+
+                    if (rows.length > 0) {
+                        const lastCode = rows[0].agent_code;
+                        const numberPart = parseInt(lastCode.replace(prefix, ""));
+                        nextNumber = numberPart + 1;
+                    }
+
+                    const newCode = prefix + String(nextNumber).padStart(6, "0");
+
+                    insertUser(newCode);
+
+                });
+
+            } else {
+
+                insertUser();
 
             }
-        );
-    };
 
-    if (role === "agent") {
+        });
 
-        const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
-
-        db.query(
-            `SELECT agent_code FROM users WHERE agent_code LIKE ? ORDER BY id DESC LIMIT 1`,
-            [`${prefix}%`],
-            (err, rows) => {
-
-                let nextNumber = 1;
-
-                if (rows.length > 0 && rows[0].agent_code) {
-                    const numberPart = parseInt(
-                        rows[0].agent_code.replace(prefix, "")
-                    );
-                    nextNumber = numberPart + 1;
-                }
-
-                const newCode =
-                    prefix + String(nextNumber).padStart(6, "0");
-
-                generateAndInsert(newCode);
-            }
-        );
-
-    } else {
-
-        generateAndInsert();
-
-    }
+    });
 
 });
 
