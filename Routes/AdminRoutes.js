@@ -420,6 +420,77 @@ router.post("/create-user", (req, res) => {
 
 });
 
+router.put("/update-user/:id", (req, res) => {
+
+  const { id } = req.params;
+
+  const {
+    supplier_type,
+    company_name,
+    contact_person,
+    email,
+    mobile,
+    address_line1,
+    address_line2,
+    city,
+    state,
+    pincode,
+    country,
+    gst_applicable,
+    gst_number,
+    agent_type
+  } = req.body;
+
+  const sql = `
+  UPDATE users SET
+  supplier_type=?,
+  company_name=?,
+  contact_person=?,
+  email=?,
+  mobile=?,
+  address_line1=?,
+  address_line2=?,
+  city=?,
+  state=?,
+  pincode=?,
+  country=?,
+  gst_applicable=?,
+  gst_number=?,
+  agent_type=?
+  WHERE id=?
+  `;
+
+  db.query(
+    sql,
+    [
+      supplier_type,
+      company_name,
+      contact_person,
+      email,
+      mobile,
+      address_line1,
+      address_line2,
+      city,
+      state,
+      pincode,
+      country,
+      gst_applicable,
+      gst_number,
+      agent_type,
+      id
+    ],
+    (err) => {
+
+      if (err) {
+        return res.status(500).json({ message: "Database error" });
+      }
+
+      res.json({ message: "User updated successfully" });
+
+    }
+  );
+});
+
 
 
 const crypto = require("crypto");
@@ -711,23 +782,25 @@ router.get("/properties", async (req, res) => {
 
         // 📌 Fetch paginated data
         const [rows] = await db.promise().query(
-            `
-      SELECT 
-        p.id,
-        p.name,
-        p.category,
-        p.city,
-        p.status,
-        p.created_at,
-        u.company_name AS supplier_name
-      FROM properties p
+`
+SELECT 
+  p.id,
+  p.name,
+  p.category,
+  p.city,
+  p.status,
+  p.visibility_type,
+  p.property_status,
+  p.created_at,
+  u.company_name AS supplier_name
+FROM properties p
 LEFT JOIN users u ON p.supplier_id = u.id
-      ${where}
-      ORDER BY p.id DESC
-      LIMIT ? OFFSET ?
-      `,
-            [...params, limit, offset]
-        );
+${where}
+ORDER BY p.id DESC
+LIMIT ? OFFSET ?
+`,
+[...params, limit, offset]
+);
 
         // 📌 Count total
         const [count] = await db.promise().query(
@@ -1065,6 +1138,32 @@ router.get("/categories", (req, res) => {
 
         res.json(results);
     });
+});
+
+
+// ================= UPDATE PROPERTY STATUS =================
+
+router.put("/update-property-status/:id", async (req, res) => {
+
+  try {
+
+    const { id } = req.params;
+    const { property_status } = req.body;
+
+    await db.promise().query(
+      `UPDATE properties SET property_status=? WHERE id=?`,
+      [property_status, id]
+    );
+
+    res.json({
+      message: "Property status updated successfully"
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+
 });
 
 module.exports = router;
