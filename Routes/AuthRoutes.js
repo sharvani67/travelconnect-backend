@@ -12,9 +12,12 @@ router.post("/register", (req, res) => {
     role,
     company_name,
     contact_person,
-    email,
-    mobiles, // <-- multiple mobiles
+    emails,
+    mobiles,
+    area,
+    landmark,
     city,
+    state,
     pincode,
     country,
     supplier_type,
@@ -26,16 +29,6 @@ router.post("/register", (req, res) => {
 
 
   // ================= VALIDATION =================
-  if (
-    !role ||
-    !company_name ||
-    !contact_person ||
-    !email ||
-    !Array.isArray(mobiles) ||
-    mobiles.filter(m => m.trim() !== "").length === 0
-  ) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
 
   if (gst_applicable === "yes" && !gst_number) {
     return res.status(400).json({ message: "GST number required" });
@@ -50,47 +43,45 @@ router.post("/register", (req, res) => {
   }
 
 
-  // ================= DUPLICATE COMPANY CHECK =================
-  const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
+  // ================= MAIN FUNCTION =================
 
-  db.query(checkNameSql, [company_name], (err, existing) => {
+  const continueRegistration = () => {
 
-    if (err) {
-      console.error("Company check error:", err);
-      return res.status(500).json({ message: "Database error" });
-    }
-
-    if (existing.length > 0 && !allow_duplicate) {
-      return res.status(409).json({
-        duplicate: true,
-        message: "Company name already exists. Do you want to continue?"
-      });
-    }
-
+    const cleanedEmails = (emails || []).filter(e => e.trim() !== "");
+    const cleanedMobiles = (mobiles || []).filter(m => m.trim() !== "");
 
     // ================= EMAIL DUPLICATE CHECK =================
-    const checkEmailSql = `SELECT id FROM users WHERE email = ? AND company_name = ?`;
 
-    db.query(checkEmailSql, [email, company_name], (err, emailRows) => {
+    const checkEmailSql = `SELECT company_name, email FROM users WHERE email IS NOT NULL`;
+
+    db.query(checkEmailSql, (err, rows) => {
 
       if (err) {
         console.error("Email check error:", err);
         return res.status(500).json({ message: "Database error" });
       }
 
-      if (emailRows.length > 0) {
-        return res.status(400).json({
-          message: "Email already registered for this supplier"
-        });
+      for (let user of rows) {
+
+        const existingEmails = user.email
+          ? user.email.split(",").map(e => e.trim())
+          : [];
+
+        for (let newEmail of cleanedEmails) {
+
+          if (existingEmails.includes(newEmail) && user.company_name === company_name) {
+            return res.status(400).json({
+              message: "Email already exists for this company"
+            });
+          }
+
+        }
       }
 
 
-      // ================= MOBILE CHECK =================
-      const checkMobileSql = `
-        SELECT company_name, mobile 
-        FROM users 
-        WHERE mobile IS NOT NULL
-      `;
+      // ================= MOBILE DUPLICATE CHECK =================
+
+      const checkMobileSql = `SELECT company_name, mobile FROM users WHERE mobile IS NOT NULL`;
 
       db.query(checkMobileSql, (err, rows) => {
 
@@ -105,16 +96,12 @@ router.post("/register", (req, res) => {
             ? user.mobile.split(",").map(m => m.trim())
             : [];
 
-          for (let newMobile of mobiles) {
+          for (let newMobile of cleanedMobiles) {
 
-            if (existingMobiles.includes(newMobile)) {
-
-              if (user.company_name === company_name) {
-                return res.status(400).json({
-                  message: "Mobile number already exists for this supplier"
-                });
-              }
-
+            if (existingMobiles.includes(newMobile) && user.company_name === company_name) {
+              return res.status(400).json({
+                message: "Mobile number already exists for this company"
+              });
             }
 
           }
@@ -123,28 +110,34 @@ router.post("/register", (req, res) => {
 
 
         // ================= INSERT FUNCTION =================
+
         const insertUser = (agentCode = null) => {
 
           const sql = `
-            INSERT INTO users
-            (role, agent_type, agent_code, supplier_type, company_name,
-             contact_person, email, mobile, country, city, pincode,
-             gst_applicable, gst_number, status, registration_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self')
+          INSERT INTO users
+          (role, agent_type, agent_code, supplier_type,
+           company_name, contact_person, email, mobile,
+           area, landmark, city, state, pincode, country,
+           gst_applicable, gst_number,
+           status, registration_type, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'self', 0)
           `;
 
           const values = [
             role,
             agent_type || null,
-            agentCode || null,
+            agentCode,
             supplier_type || null,
             company_name,
             contact_person,
-            email,
-            mobiles.join(","),
-            country || null,
+            cleanedEmails.join(","),
+            cleanedMobiles.join(","),
+            area || null,
+            landmark || null,
             city || null,
+            state || null,
             pincode || null,
+            country || null,
             gst_applicable || "no",
             gst_number || null
           ];
@@ -165,16 +158,17 @@ router.post("/register", (req, res) => {
         };
 
 
-        // ================= AGENT CODE GENERATION =================
+        // ================= AGENT CODE =================
+
         if (role === "agent") {
 
           const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
           const codeSql = `
-            SELECT agent_code FROM users
-            WHERE agent_code LIKE ?
-            ORDER BY id DESC
-            LIMIT 1
+          SELECT agent_code FROM users
+          WHERE agent_code LIKE ?
+          ORDER BY id DESC
+          LIMIT 1
           `;
 
           db.query(codeSql, [`${prefix}%`], (err, rows) => {
@@ -208,7 +202,38 @@ router.post("/register", (req, res) => {
 
     });
 
-  });
+  };
+
+
+  // ================= DUPLICATE COMPANY CHECK =================
+
+  if (role === "supplier") {
+
+    const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
+
+    db.query(checkNameSql, [company_name], (err, existing) => {
+
+      if (err) {
+        console.error("Company check error:", err);
+        return res.status(500).json({ message: "Database error" });
+      }
+
+      if (existing.length > 0 && !allow_duplicate) {
+        return res.status(409).json({
+          duplicate: true,
+          message: "Company name already exists. Do you want to continue?"
+        });
+      }
+
+      continueRegistration();
+
+    });
+
+  } else {
+
+    continueRegistration();
+
+  }
 
 });
 

@@ -121,12 +121,37 @@ router.get("/users", (req, res) => {
 // ================= GET SINGLE USER =================
 router.get("/user/:id", (req, res) => {
     db.query(
-        "SELECT * FROM users WHERE id=?",
+        `
+    SELECT 
+      id,
+      role,
+      company_name,
+      contact_person,
+      email,
+      mobile,
+      supplier_type,
+      agent_type,
+      agent_code,
+      area,
+      landmark,
+      city,
+      state,
+      pincode,
+      country,
+      gst_applicable,
+      gst_number,
+      registration_type,
+      status,
+      created_at,
+      admin_password
+    FROM users
+    WHERE id = ?
+    `,
         [req.params.id],
         (err, rows) => {
             if (err) return res.status(500).json(err);
             if (!rows.length) return res.status(404).json({});
-            res.json(rows[0]);   // includes admin_password always
+            res.json(rows[0]);
         }
     );
 });
@@ -225,10 +250,8 @@ router.post("/create-user", (req, res) => {
         supplier_type,
         company_name,
         contact_person,
-        email,
+        emails,
         mobiles,
-        address_line1,
-        address_line2,
         area,
         landmark,
         city,
@@ -237,21 +260,22 @@ router.post("/create-user", (req, res) => {
         country,
         gst_applicable,
         gst_number,
-        agent_type
+        agent_type,
+        allow_duplicate
     } = req.body;
 
-
     // ================= VALIDATION =================
-    if (
-        !role ||
-        !company_name ||
-        !contact_person ||
-        !email ||
-        !Array.isArray(mobiles) ||
-        mobiles.filter(m => m.trim() !== "").length === 0
-    ) {
-        return res.status(400).json({ message: "Missing required fields" });
-    }
+    // if (
+    //     !role ||
+    //     !company_name ||
+    //     !contact_person ||
+    //     !Array.isArray(emails) ||
+    //     emails.filter(e => e.trim() !== "").length === 0 ||
+    //     !Array.isArray(mobiles) ||
+    //     mobiles.filter(m => m.trim() !== "").length === 0
+    // ) {
+    //     return res.status(400).json({ message: "Required fields missing" });
+    // }
 
     if (gst_applicable === "yes" && !gst_number) {
         return res.status(400).json({ message: "GST number required" });
@@ -265,154 +289,196 @@ router.post("/create-user", (req, res) => {
         return res.status(400).json({ message: "Agent type required" });
     }
 
+    const cleanedEmails = emails.filter(e => e.trim() !== "");
+    const cleanedMobiles = mobiles.filter(m => m.trim() !== "");
 
-    // ================= EMAIL DUPLICATE CHECK =================
-    const checkEmailSql = `
-  SELECT id FROM users 
-  WHERE email = ? AND company_name = ?
-  `;
+    // ================= COMPANY NAME CHECK =================
+    const checkNameSql = `SELECT id FROM users WHERE company_name = ?`;
 
-    db.query(checkEmailSql, [email, company_name], (err, emailRows) => {
+    db.query(checkNameSql, [company_name], (err, existing) => {
 
         if (err) {
-            console.error("Email check error:", err);
+            console.error(err);
             return res.status(500).json({ message: "Database error" });
         }
 
-        if (emailRows.length > 0) {
-            return res.status(400).json({
-                message: "Email already exists for this User"
+        if (existing.length > 0 && !allow_duplicate) {
+            return res.status(409).json({
+                duplicate: true,
+                message: "Company name already exists. Do you want to continue?"
             });
         }
 
+        // ================= EMAIL CHECK =================
+        const emailSql = `SELECT company_name, email FROM users WHERE email IS NOT NULL`;
 
-        // ================= MOBILE CHECK =================
-        const checkMobileSql = `
-      SELECT company_name, mobile
-      FROM users
-      WHERE mobile IS NOT NULL
-    `;
-
-        db.query(checkMobileSql, (err, rows) => {
+        db.query(emailSql, (err, rows) => {
 
             if (err) {
-                console.error("Mobile check error:", err);
+                console.error(err);
                 return res.status(500).json({ message: "Database error" });
             }
 
             for (let user of rows) {
 
-                const existingMobiles = user.mobile
-                    ? user.mobile.split(",").map(m => m.trim())
+                const existingEmails = user.email
+                    ? user.email.split(",").map(e => e.trim())
                     : [];
 
-                for (let newMobile of mobiles) {
+                for (let newEmail of cleanedEmails) {
 
-                    if (existingMobiles.includes(newMobile)) {
+                    if (existingEmails.includes(newEmail)) {
 
                         if (user.company_name === company_name) {
                             return res.status(400).json({
-                                message: "Mobile number already exists for this User"
+                                message: "Email already exists for this company"
                             });
                         }
 
                     }
 
                 }
-
             }
 
+            // ================= MOBILE CHECK =================
+            const mobileSql = `SELECT company_name, mobile FROM users WHERE mobile IS NOT NULL`;
 
-            // ================= INSERT FUNCTION =================
-            const insertUser = (agentCode = null) => {
+            db.query(mobileSql, (err, rows) => {
 
-                const sql = `
-        INSERT INTO users
-        (role, agent_type, agent_code, supplier_type,
-        company_name, contact_person, email,
-        mobile,
-        address_line1, address_line2, area, landmark, city, state, pincode, country,
-        gst_applicable, gst_number,
-        status, registration_type, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'admin', 0)
-        `;
+                if (err) {
+                    console.error(err);
+                    return res.status(500).json({ message: "Database error" });
+                }
 
-                const values = [
-                    role,
-                    agent_type || null,
-                    agentCode || null,
-                    supplier_type || null,
-                    company_name,
-                    contact_person,
-                    email,
-                    mobiles.join(","), // store multiple mobiles
-                    address_line1 || null,
-                    address_line2 || null,
-                    area || null,
-                    landmark || null,
-                    city || null,
-                    state || null,
-                    pincode || null,
-                    country || null,
-                    gst_applicable || "no",
-                    gst_number || null
-                ];
+                for (let user of rows) {
 
-                db.query(sql, values, (err) => {
+                    const existingMobiles = user.mobile
+                        ? user.mobile.split(",").map(m => m.trim())
+                        : [];
 
-                    if (err) {
-                        console.error("Insert user error:", err);
-                        return res.status(500).json({ message: "Database error" });
+                    for (let newMobile of cleanedMobiles) {
+
+                        if (existingMobiles.includes(newMobile)) {
+
+                            if (user.company_name === company_name) {
+                                return res.status(400).json({
+                                    message: "Mobile already exists for this company"
+                                });
+                            }
+
+                        }
+
                     }
 
-                    res.json({
-                        message: "User created successfully"
+                }
+
+                // ================= INSERT FUNCTION =================
+                const insertUser = (agentCode = null) => {
+
+                    const sql = `
+            INSERT INTO users
+            (
+              role,
+              agent_type,
+              agent_code,
+              supplier_type,
+              company_name,
+              contact_person,
+              email,
+              mobile,
+              area,
+              landmark,
+              city,
+              state,
+              pincode,
+              country,
+              gst_applicable,
+              gst_number,
+              status,
+              registration_type,
+              is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `;
+
+                    const values = [
+                        role,
+                        agent_type || null,
+                        agentCode || null,
+                        supplier_type || null,
+                        company_name,
+                        contact_person,
+                        cleanedEmails.join(","),
+                        cleanedMobiles.join(","),
+                        area || null,
+                        landmark || null,
+                        city || null,
+                        state || null,
+                        pincode || null,
+                        country || null,
+                        gst_applicable || "no",
+                        gst_number || null,
+                        "pending",
+                        "admin",
+                        0
+                    ];
+
+                    db.query(sql, values, (err) => {
+
+                        if (err) {
+                            console.error(err);
+                            return res.status(500).json({ message: "Database error" });
+                        }
+
+                        res.json({
+                            message: "User created successfully"
+                        });
+
                     });
 
-                });
+                };
 
-            };
+                // ================= AGENT CODE =================
+                if (role === "agent") {
 
+                    const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
 
-            // ================= AGENT CODE GENERATION =================
-            if (role === "agent") {
+                    const codeSql = `
+            SELECT agent_code
+            FROM users
+            WHERE agent_code LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+          `;
 
-                const prefix = agent_type === "Domestic" ? "DOMA" : "INTA";
+                    db.query(codeSql, [`${prefix}%`], (err, rows) => {
 
-                const codeSql = `
-        SELECT agent_code
-        FROM users
-        WHERE agent_code LIKE ?
-        ORDER BY id DESC
-        LIMIT 1
-        `;
+                        if (err) {
+                            console.error(err);
+                            return res.status(500).json({ message: "Database error" });
+                        }
 
-                db.query(codeSql, [`${prefix}%`], (err, rows) => {
+                        let nextNumber = 1;
 
-                    if (err) {
-                        console.error("Agent code error:", err);
-                        return res.status(500).json({ message: "Database error" });
-                    }
+                        if (rows.length > 0) {
+                            const lastCode = rows[0].agent_code;
+                            const numberPart = parseInt(lastCode.replace(prefix, ""));
+                            nextNumber = numberPart + 1;
+                        }
 
-                    let nextNumber = 1;
+                        const newCode = prefix + String(nextNumber).padStart(6, "0");
 
-                    if (rows.length > 0) {
-                        const lastCode = rows[0].agent_code;
-                        const numberPart = parseInt(lastCode.replace(prefix, ""));
-                        nextNumber = numberPart + 1;
-                    }
+                        insertUser(newCode);
 
-                    const newCode = prefix + String(nextNumber).padStart(6, "0");
+                    });
 
-                    insertUser(newCode);
+                } else {
 
-                });
+                    insertUser();
 
-            } else {
+                }
 
-                insertUser();
-
-            }
+            });
 
         });
 
@@ -422,34 +488,34 @@ router.post("/create-user", (req, res) => {
 
 router.put("/update-user/:id", (req, res) => {
 
-  const { id } = req.params;
+    const { id } = req.params;
 
-  const {
-    supplier_type,
-    company_name,
-    contact_person,
-    email,
-    mobile,
-    address_line1,
-    address_line2,
-    city,
-    state,
-    pincode,
-    country,
-    gst_applicable,
-    gst_number,
-    agent_type
-  } = req.body;
+    const {
+        supplier_type,
+        company_name,
+        contact_person,
+        email,
+        mobile,
+        area,
+        landmark,
+        city,
+        state,
+        pincode,
+        country,
+        gst_applicable,
+        gst_number,
+        agent_type
+    } = req.body;
 
-  const sql = `
+    const sql = `
   UPDATE users SET
   supplier_type=?,
   company_name=?,
   contact_person=?,
   email=?,
   mobile=?,
-  address_line1=?,
-  address_line2=?,
+  area=?,
+landmark=?,
   city=?,
   state=?,
   pincode=?,
@@ -460,35 +526,35 @@ router.put("/update-user/:id", (req, res) => {
   WHERE id=?
   `;
 
-  db.query(
-    sql,
-    [
-      supplier_type,
-      company_name,
-      contact_person,
-      email,
-      mobile,
-      address_line1,
-      address_line2,
-      city,
-      state,
-      pincode,
-      country,
-      gst_applicable,
-      gst_number,
-      agent_type,
-      id
-    ],
-    (err) => {
+    db.query(
+        sql,
+        [
+            supplier_type,
+            company_name,
+            contact_person,
+            email,
+            mobile,
+            area,
+            landmark,
+            city,
+            state,
+            pincode,
+            country,
+            gst_applicable,
+            gst_number,
+            agent_type,
+            id
+        ],
+        (err) => {
 
-      if (err) {
-        return res.status(500).json({ message: "Database error" });
-      }
+            if (err) {
+                return res.status(500).json({ message: "Database error" });
+            }
 
-      res.json({ message: "User updated successfully" });
+            res.json({ message: "User updated successfully" });
 
-    }
-  );
+        }
+    );
 });
 
 
@@ -782,7 +848,7 @@ router.get("/properties", async (req, res) => {
 
         // 📌 Fetch paginated data
         const [rows] = await db.promise().query(
-`
+            `
 SELECT 
   p.id,
   p.name,
@@ -799,8 +865,8 @@ ${where}
 ORDER BY p.id DESC
 LIMIT ? OFFSET ?
 `,
-[...params, limit, offset]
-);
+            [...params, limit, offset]
+        );
 
         // 📌 Count total
         const [count] = await db.promise().query(
@@ -1145,24 +1211,24 @@ router.get("/categories", (req, res) => {
 
 router.put("/update-property-status/:id", async (req, res) => {
 
-  try {
+    try {
 
-    const { id } = req.params;
-    const { property_status } = req.body;
+        const { id } = req.params;
+        const { property_status } = req.body;
 
-    await db.promise().query(
-      `UPDATE properties SET property_status=? WHERE id=?`,
-      [property_status, id]
-    );
+        await db.promise().query(
+            `UPDATE properties SET property_status=? WHERE id=?`,
+            [property_status, id]
+        );
 
-    res.json({
-      message: "Property status updated successfully"
-    });
+        res.json({
+            message: "Property status updated successfully"
+        });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+    }
 
 });
 
