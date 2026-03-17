@@ -169,7 +169,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
     let parsedFaqs = [];
     let parsedRules = [];
     let parsedCheckin = {};
-    let parsedBank = {};
+    let parsedBank = [];
     const parsedContacts = contacts ? JSON.parse(contacts) : [];
     const parsedEmails = emails ? JSON.parse(emails) : [];
     try {
@@ -181,7 +181,7 @@ router.post("/add-property", uploadFields, async (req, res) => {
         parsedFaqs = faqs ? JSON.parse(faqs) : [];
         parsedRules = cancellation_rules ? JSON.parse(cancellation_rules) : [];
         parsedCheckin = checkin_data ? JSON.parse(checkin_data) : {};
-        parsedBank = bank_details ? JSON.parse(bank_details) : {};
+        parsedBank = bank_details ? JSON.parse(bank_details) : [];
     } catch (err) {
         return res.status(400).json({ message: "Invalid JSON format" });
     }
@@ -250,16 +250,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         for (const room of parsedRooms) {
 
             const [roomResult] = await connection.query(
-                `INSERT INTO property_rooms
-         (property_id, type, max_adults, max_children)
-         VALUES (?, ?, ?, ?)`,
-                [
-                    propertyId,
-                    room.type || "",
-                    Number(room.max_adults) || 0,
-                    Number(room.max_children) || 0
-                ]
-            );
+  `INSERT INTO property_rooms
+   (property_id, type, max_adults, max_children, valid_from, valid_to)
+   VALUES (?, ?, ?, ?, ?, ?)`,
+  [
+    propertyId,
+    room.type || "",
+    Number(room.max_adults) || 0,
+    Number(room.max_children) || 0,
+    room.validFrom || null,   // ✅ NEW
+    room.validTo || null      // ✅ NEW
+  ]
+);
 
             const roomId = roomResult.insertId;
 
@@ -432,21 +434,27 @@ VALUES (?,?,?,?,?,?)`,
         );
 
         // 12️⃣ INSERT BANK DETAILS
-        await connection.query(
-            `INSERT INTO property_bank_details
-       (property_id, account_holder, bank_name,
-        account_number, ifsc, branch, cancelled_cheque)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [
-                propertyId,
-                parsedBank.account_holder || "",
-                parsedBank.bank_name || "",
-                parsedBank.account_number || "",
-                parsedBank.ifsc || "",
-                parsedBank.branch || "",
-                req.files?.cancelledCheque?.[0]?.filename || ""
-            ]
-        );
+      for (let i = 0; i < parsedBank.length; i++) {
+
+  const chequeFile =
+    req.files?.cancelledCheque?.[i]?.filename || "";
+
+  await connection.query(
+    `INSERT INTO property_bank_details
+(property_id, account_holder, bank_name,
+ account_number, ifsc, branch, cancelled_cheque)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      propertyId,
+      parsedBank[i].account_holder || "",
+      parsedBank[i].bank_name || "",
+      parsedBank[i].account_number || "",
+      parsedBank[i].ifsc || "",
+      parsedBank[i].branch || "",
+      chequeFile
+    ]
+  );
+}
 
         await connection.commit();
         connection.release();
